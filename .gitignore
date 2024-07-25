@@ -1,8 +1,5 @@
 .cache/
 *.o
 *.swp
-CMakeCache.txt
-CMakeFiles
-Makefile
-cmake_install.cmake
+aasm
 compile_commands.json

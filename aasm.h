@@ -1,5 +1,8 @@
 #include <stdint.h>
 
+#ifndef AMALGAM_ASM
+#define AMALGAM_ASM
+
 //TODO add more complex things like LEA
 typedef enum {
   I_NOP,
@@ -183,7 +186,7 @@ typedef struct {
   void (*io_proc[8])(uint16_t, uint8_t*);
 } hw;
 
-const uint8_t hw_limits[2][PORT_LAST] = {
+static const uint8_t hw_limits[2][PORT_LAST] = {
   {
     [PORT_MAIN] = 1,
     [PORT_ROM] = 1,
@@ -203,4 +206,4 @@ void int_complex(hw *s, cpu *core, uint8_t number);
 uint8_t *mmu_simple(hw *s, cpu *core, uint16_t addr);
 uint8_t *mmu_complex(hw *s, cpu *core, uint32_t addr, uint8_t mode);
 
-
+#endif
