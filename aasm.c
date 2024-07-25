@@ -12,9 +12,10 @@
 #define ifln(flag) if (REG_LN(insn[flag]))
 
 //TODO make use of new MACROs
-hw *build_system(hw_desc *desc) {
+hw *build_system(const hw_desc *desc) {
   hw *p = malloc(sizeof(hw));
   if (!p) return 0;
+  const uint8_t *boot_rom = 0;
 
   p->status = 0;
   p->top_freq = 0;
@@ -23,26 +24,6 @@ hw *build_system(hw_desc *desc) {
   check_hw_ol(ROM);
   check_hw_ol(RAM);
   check_hw_ol(IO);
-
-  if ((!(desc->opts & OPT_COMPLEX) && desc->cpu_count > 1) || desc->cpu_count > 8)
-    p->status |= ERR_CPU_OL;
-  else {
-    p->cpu_count = desc->cpu_count;
-    p->cpus = malloc(sizeof(cpu)*p->cpu_count);
-    if (!p->cpus) p->status |= ERR_MALLOC;
-    else {
-      for (int i = 0; i < p->cpu_count; i++) {
-	cpu *core = p->cpus + i;
-	core->max_freq = core->freq = desc->cpus[i].freq;
-	check_fq(core->freq);
-	for (int j = 0; j < GPR_LAST; j++) core->gpr[j] = 0;
-	for (int j = 0; j < MSR_LAST; j++) core->msr[j] = 0;
-	core->msr[MSR_MODE] = (i << MSR_MODE_COREID) & MSR_MODE_COREID_MASK;
-      }
-      p->cpus[0].gpr[GPR_IP] = 0x1100;
-      p->cpus[0].msr[MSR_MODE] |= 1 << MSR_MODE_RUNNING;
-    }
-  }
 
   if (!(p->status & ERR_RAM_OL)) {
     p->ram_size = 0;
@@ -77,7 +58,6 @@ hw *build_system(hw_desc *desc) {
     }
   }
 
-  const uint8_t *boot_rom = 0;
   if (!(p->status & ERR_ROM_OL)) {
     p->rom_count = desc->md_count[PORT_ROM];
     for (int i = 0; i < p->rom_count; i++) {
@@ -85,11 +65,10 @@ hw *build_system(hw_desc *desc) {
       p->rom_size[i] = rom->p_size;
       p->roms[i] = rom->builder();
       if (!p->roms[i]) p->status |= ERR_MALLOC;
-      else if (rom->p_size > 0 && rom->p_size % 4096 == 0 && *((uint32_t*)p->roms[i]) == 0xAC3618CA)
+      else if (rom->p_size > 0 && rom->p_size % 4096 == 0 && *((uint32_t*)p->roms[i]) == 0xCA1836AC)
 	boot_rom = p->roms[i];
     }
   }
-  if (!boot_rom) p->status |= ERR_CPU_IP;
 
   if (!(p->status & ERR_IO_OL)) {
     p->io_count = desc->md_count[PORT_IO];
@@ -101,7 +80,31 @@ hw *build_system(hw_desc *desc) {
     }
   }
 
-  if (!(p->status & 0xFFFF)) {
+  if ((!(desc->opts & OPT_COMPLEX) && desc->cpu_count > 1) || desc->cpu_count > 8)
+    p->status |= ERR_CPU_OL;
+  else {
+    p->cpu_count = desc->cpu_count;
+    p->cpus = malloc(sizeof(cpu)*p->cpu_count);
+    if (!p->cpus) p->status |= ERR_MALLOC;
+    else {
+      for (int i = 0; i < p->cpu_count; i++) {
+	cpu *core = p->cpus + i;
+	core->max_freq = core->freq = desc->cpus[i].freq;
+	check_fq(core->freq);
+	for (int j = 0; j < GPR_LAST; j++) core->gpr[j] = 0;
+	for (int j = 0; j < MSR_LAST; j++) core->msr[j] = 0;
+	MSR(MODE) = (i << MSR_MODE_COREID) & MSR_MODE_COREID_MASK;
+	MSR(MODE) |= (1 << MSR_MODE_KERNEL);
+	GPR(SP) = p->ram_size;
+	GPR(BP) = p->ram_size;
+      }
+      p->cpus[0].gpr[GPR_IP] = 0x1100;
+      p->cpus[0].msr[MSR_MODE] |= (1 << MSR_MODE_RUNNING);
+    }
+  }
+  
+  if (!boot_rom) p->status |= ERR_CPU_IP;
+  else if (!(p->status & 0xFFFF)) {
     p->status |= STATE_RUNNING | STATE_STABLE;
     memcpy(p->ram + 0x1000, boot_rom, 0x1000);
   }
@@ -233,8 +236,8 @@ void execute_simple(hw *s, cpu *core) {
       size = 2;
       break;
     case I_POP:
-      ifln(1) GPR_32(1) = *MMUS_32(GPR(SP) -= 4);
-      else GPR_16(1) = *MMUS_16(GPR(SP) -= 2);
+      ifln(1) {GPR_32(1) = *MMUS_32(GPR(SP)); GPR(SP) += 4;}
+      else {GPR_16(1) = *MMUS_16(GPR(SP)); GPR(SP) += 2;}
       size = 2;
       break;
 

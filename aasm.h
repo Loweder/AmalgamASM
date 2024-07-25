@@ -136,7 +136,6 @@ typedef enum {
 } hw_opt;
 
 typedef struct {
-  port_type port;
   uint32_t freq;
   uint32_t p_size;
   uint8_t *(*builder)(void);
@@ -205,5 +204,7 @@ void int_simple(hw *s, cpu *core, uint8_t number);
 void int_complex(hw *s, cpu *core, uint8_t number);
 uint8_t *mmu_simple(hw *s, cpu *core, uint16_t addr);
 uint8_t *mmu_complex(hw *s, cpu *core, uint32_t addr, uint8_t mode);
+hw *build_system(const hw_desc *desc);
+void execute(hw *s);
 
 #endif
