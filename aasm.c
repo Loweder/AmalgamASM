@@ -10,6 +10,7 @@
 #define ret_intc(intp) int_complex(s, core, INT_ ## intp); \
   return 0;
 #define ifln(flag) if (REG_LN(insn[flag]))
+#define ifmem(flag) if (REG_RM(insn[flag]))
 
 //TODO make use of new MACROs
 hw *build_system(const hw_desc *desc) {
@@ -208,14 +209,8 @@ void execute_simple(hw *s, cpu *core) {
       size = 3;
       break;
     case I_MOVI:
-      switch(REG_RM(insn[1])) {
-	case 0x20:
-	  *MMUS_16(GPR_16(1)) = IMM_16(2);
-	  break;
-	default:
-	  GPR_16(1) = IMM_16(2);
-	  break;
-      }
+      ifmem(1) *MMUS_16(GPR_16(1)) = IMM_16(2);
+      else GPR_16(1) = IMM_16(2);
       size = 4;
       break;
     case I_SWAP:
@@ -243,15 +238,47 @@ void execute_simple(hw *s, cpu *core) {
 
 
     case I_ADD:
+      switch(REG_RM(insn[1])) {
+	case 0x10:
+	  ifln(1) GPR_32(1) += *MMUS_32(GPR_16(2));
+	  else GPR_16(1) += *MMUS_16(GPR_16(2));
+	  break;
+	case 0x20:
+	  ifln(1) *MMUS_32(GPR_16(1)) += GPR_32(2); 
+	  else *MMUS_16(GPR_16(1)) += GPR_16(2);
+	  break;
+	default:
+	  ifln(1) GPR_32(1) += GPR_32(2); 
+	  else GPR_16(1) += GPR_16(2);
+	  break;
+      }
       size = 3;
       break;
     case I_ADI:
+      ifmem(1) *MMUS_16(GPR_16(1)) += IMM_16(2);
+      else GPR_16(1) += IMM_16(2);
       size = 4;
       break;
     case I_SUB:
+      switch(REG_RM(insn[1])) {
+	case 0x10:
+	  ifln(1) GPR_32(1) -= *MMUS_32(GPR_16(2));
+	  else GPR_16(1) -= *MMUS_16(GPR_16(2));
+	  break;
+	case 0x20:
+	  ifln(1) *MMUS_32(GPR_16(1)) -= GPR_32(2); 
+	  else *MMUS_16(GPR_16(1)) -= GPR_16(2);
+	  break;
+	default:
+	  ifln(1) GPR_32(1) -= GPR_32(2); 
+	  else GPR_16(1) -= GPR_16(2);
+	  break;
+      }
       size = 3;
       break;
     case I_SBI:
+      ifmem(1) *MMUS_16(GPR_16(1)) -= IMM_16(2);
+      else GPR_16(1) -= IMM_16(2);
       size = 4;
       break;
 
@@ -265,73 +292,236 @@ void execute_simple(hw *s, cpu *core) {
       size = 3;
       break;
     case I_INC:
+      switch(REG_RM(insn[1])) {
+	case 0x20:
+	  ifln(1) (*MMUS_32(GPR_16(1)))++;
+	  else (*MMUS_16(GPR_16(1)))++;
+	  break;
+	default:
+	  ifln(1) (GPR_32(1))++;
+	  else (GPR_16(1))++;
+	  break;
+      }
       size = 2;
       break;
     case I_DEC:
+      switch(REG_RM(insn[1])) {
+	case 0x20:
+	  ifln(1) (*MMUS_32(GPR_16(1)))--;
+	  else (*MMUS_16(GPR_16(1)))--;
+	  break;
+	default:
+	  ifln(1) (GPR_32(1))--;
+	  else (GPR_16(1))--;
+	  break;
+      }
       size = 2;
       break;
 
     case I_XOR:
+      switch(REG_RM(insn[1])) {
+	case 0x10:
+	  ifln(1) GPR_32(1) ^= *MMUS_32(GPR_16(2));
+	  else GPR_16(1) ^= *MMUS_16(GPR_16(2));
+	  break;
+	case 0x20:
+	  ifln(1) *MMUS_32(GPR_16(1)) ^= GPR_32(2); 
+	  else *MMUS_16(GPR_16(1)) ^= GPR_16(2);
+	  break;
+	default:
+	  ifln(1) GPR_32(1) ^= GPR_32(2); 
+	  else GPR_16(1) ^= GPR_16(2);
+	  break;
+      }
       size = 3;
       break;
     case I_XORI:
+      ifmem(1) *MMUS_16(GPR_16(1)) ^= IMM_16(2);
+      else GPR_16(1) ^= IMM_16(2);
       size = 4;
       break;
     case I_OR:
+      switch(REG_RM(insn[1])) {
+	case 0x10:
+	  ifln(1) GPR_32(1) |= *MMUS_32(GPR_16(2));
+	  else GPR_16(1) |= *MMUS_16(GPR_16(2));
+	  break;
+	case 0x20:
+	  ifln(1) *MMUS_32(GPR_16(1)) |= GPR_32(2); 
+	  else *MMUS_16(GPR_16(1)) |= GPR_16(2);
+	  break;
+	default:
+	  ifln(1) GPR_32(1) |= GPR_32(2); 
+	  else GPR_16(1) |= GPR_16(2);
+	  break;
+      }
       size = 3;
       break;
     case I_ORI:
+      ifmem(1) *MMUS_16(GPR_16(1)) |= IMM_16(2);
+      else GPR_16(1) |= IMM_16(2);
       size = 4;
       break;
     case I_AND:
+      switch(REG_RM(insn[1])) {
+	case 0x10:
+	  ifln(1) GPR_32(1) &= *MMUS_32(GPR_16(2));
+	  else GPR_16(1) &= *MMUS_16(GPR_16(2));
+	  break;
+	case 0x20:
+	  ifln(1) *MMUS_32(GPR_16(1)) &= GPR_32(2); 
+	  else *MMUS_16(GPR_16(1)) &= GPR_16(2);
+	  break;
+	default:
+	  ifln(1) GPR_32(1) &= GPR_32(2); 
+	  else GPR_16(1) &= GPR_16(2);
+	  break;
+      }
       size = 3;
       break;
     case I_ANDI:
+      ifmem(1) *MMUS_16(GPR_16(1)) &= IMM_16(2);
+      else GPR_16(1) &= IMM_16(2);
       size = 4;
       break;
     case I_NOT:
+      switch(REG_RM(insn[1])) {
+	case 0x20:
+	  ifln(1) *MMUS_32(GPR_16(1)) = ~(*MMUS_32(GPR_16(1)));
+	  else *MMUS_16(GPR_16(1)) = ~(*MMUS_16(GPR_16(1)));
+	  break;
+	default:
+	  ifln(1) GPR_32(1) = ~GPR_32(1);
+	  else GPR_16(1) = ~GPR_16(1);
+	  break;
+      }
       size = 2;
       break;
 
     case I_BTS:
+      ifmem(1) *MMUS_32(GPR_16(1)) |= (1 << (insn[2] & 0x1F));
+      else GPR_32(1) |= (1 << (insn[2] & 0x1F));
       size = 3;
       break;
     case I_BTR:
+      ifmem(1) *MMUS_32(GPR_16(1)) &= ~(1 << (insn[2] & 0x1F));
+      else GPR_32(1) &= ~(1 << (insn[2] & 0x1F));
       size = 3;
       break;
     case I_BTC:
+      ifmem(1) *MMUS_32(GPR_16(1)) ^= (1 << (insn[2] & 0x1F));
+      else GPR_32(1) ^= (1 << (insn[2] & 0x1F));
       size = 3;
       break;
 
     case I_SHL:
+      switch(REG_RM(insn[1])) {
+	case 0x20:
+	  ifln(1) *MMUS_32(GPR_16(1)) <<= (insn[2] & 0x1F);
+	  else *MMUS_16(GPR_16(1)) <<= (insn[2] & 0x0F);
+	  break;
+	default:
+	  ifln(1) GPR_32(1) <<= (insn[2] & 0x1F);
+	  else GPR_16(1) <<= (insn[2] & 0x0F);
+	  break;
+      }
       size = 3;
       break;
     case I_SHR:
+      switch(REG_RM(insn[1])) {
+	case 0x20:
+	  ifln(1) *MMUS_32(GPR_16(1)) >>= (insn[2] & 0x1F);
+	  else *MMUS_16(GPR_16(1)) >>= (insn[2] & 0x0F);
+	  break;
+	default:
+	  ifln(1) GPR_32(1) >>= (insn[2] & 0x1F);
+	  else GPR_16(1) >>= (insn[2] & 0x0F);
+	  break;
+      }
       size = 3;
       break;
     case I_ROL:
+      switch(REG_LN(insn[1])) {
+	case 0x40: 
+	  { uint64_t inter;
+	    ifmem(1) {
+	      inter = ((uint64_t)*MMUS_32(GPR_16(1))) << (insn[2] & 0x1F);
+	      *MMUS_32(GPR_16(1)) = inter | (inter >> 32);
+	    } else {
+	      inter = ((uint64_t)GPR_32(1)) << (insn[2] & 0x1F);
+	      GPR_32(1) = inter | (inter >> 32);
+	    };
+	    break;
+	  }
+	default:
+	  { uint32_t inter;
+	    ifmem(1) {
+	      inter = ((uint32_t)*MMUS_16(GPR_16(1))) << (insn[2] & 0xF);
+	      *MMUS_16(GPR_16(1)) = inter | (inter >> 16);
+	    } else {
+	      inter = ((uint32_t)GPR_16(1)) << (insn[2] & 0xF);
+	      GPR_16(1) = inter | (inter >> 16);
+	    };
+	    break;
+	  }
+      }
       size = 3;
       break;
     case I_ROR:
+      switch(REG_LN(insn[1])) {
+	case 0x40: 
+	  { uint64_t inter;
+	    ifmem(1) {
+	      inter = ((uint64_t)*MMUS_32(GPR_16(1))) << (31 - (insn[2] & 0x1F));
+	      *MMUS_32(GPR_16(1)) = inter | (inter >> 32);
+	    } else {
+	      inter = ((uint64_t)GPR_32(1)) << (31 - (insn[2] & 0x1F));
+	      GPR_32(1) = inter | (inter >> 32);
+	    };
+	    break;
+	  }
+	default:
+	  { uint32_t inter;
+	    ifmem(1) {
+	      inter = ((uint32_t)*MMUS_16(GPR_16(1))) << (15 - (insn[2] & 0xF));
+	      *MMUS_16(GPR_16(1)) = inter | (inter >> 16);
+	    } else {
+	      inter = ((uint32_t)GPR_16(1)) << (15 - (insn[2] & 0xF));
+	      GPR_16(1) = inter | (inter >> 16);
+	    };
+	    break;
+	  }
+      }
       size = 3;
       break;
 
 
     case I_INT:
-      size = 2;
-      break;
+      int_simple(s, core, insn[1]);
+      return;
     case I_JMP:
-      size = 3;
-      break;
+      GPR(IP) = IMM_16(1);
+      return;
+    case I_CALL:
+      *MMUS_16(GPR(SP) -= 2) = GPR(IP);
+      GPR(IP) = IMM_16(1);
+      return;
     case I_IJMP:
-      size = 2;
-      break;
+      ifmem(1) GPR(IP) = *MMUS_16(GPR_16(1));
+      else GPR(IP) = GPR_16(1);
+      return;
+    case I_ICALL:
+      *MMUS_16(GPR(SP) -= 2) = GPR(IP);
+      ifmem(1) GPR(IP) = *MMUS_16(GPR_16(1));
+      else GPR(IP) = GPR_16(1);
+      return;
     case I_JFL:
       size = 4;
       break;
     case I_RET:
-      size = 1;
-      break;
+      GPR(IP) = *MMUS_16(GPR(SP)); 
+      GPR(SP) += 2;
+      return;
 
 
     case I_IO:
@@ -345,14 +535,18 @@ void execute_simple(hw *s, cpu *core) {
       break;
 
     case I_SEI:
+      BIT_S(MSR(ALU), MSR_ALU_IF);
       size = 1;
       break;
     case I_CLI:
+      BIT_R(MSR(ALU), MSR_ALU_IF);
       size = 1;
       break;
     case I_IRET:
-      size = 1;
-      break;
+      BIT_S(MSR(ALU), MSR_ALU_IF);
+      GPR(IP) = *MMUS_16(GPR(SP)); 
+      GPR(SP) += 2;
+      return;
     default:
       int_simple(s, core, INT_IL);
       return;

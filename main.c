@@ -47,9 +47,9 @@ static const md_desc rams[1] = {
 
 static const hw_desc device = {
   .cpu_count = 2,
-  .cpus = cpus,
+  .cpus = (cpu_desc*) cpus,
   .md_count = {[PORT_ROM] = 1, [PORT_RAM] = 1},
-  .md = {[PORT_ROM] = roms, [PORT_RAM] = rams},
+  .md = {[PORT_ROM] = (md_desc*) roms, [PORT_RAM] = (md_desc*) rams},
   .opts = OPT_COMPLEX
 };
 
@@ -65,7 +65,7 @@ int main(void) {
     return -1;
   }
   while (1) {
-    printf("System State:\n");
+    printf("----------------------------------------\nSystem State:\n");
     for (int i = 0; i < system->cpu_count; i++) {
       cpu *core = system->cpus + i;
       printf("Core %i:\nR1: %8lX | R2: %8lX | R3: %8lX | R4: %8lX | R5: %8lX | R6: %8lX | R7: %8lX | R8: %8lX\n\

@@ -19,8 +19,8 @@ typedef enum {
   I_BTS, I_BTR, I_BTC,
   I_SHL, I_SHR, I_ROL, I_ROR,
  
-  //TODO jmp is also call, also maybe add SETcc
-  I_INT, I_JMP, I_IJMP, I_JFL, I_RET,
+  //TODO maybe add SETcc
+  I_INT, I_JMP, I_CALL, I_IJMP, I_ICALL, I_JFL, I_RET,
   
   //TODO maybe make HALT as real opcode
   I_IO = 0x80, I_IIO, I_CR,
