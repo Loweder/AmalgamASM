@@ -4,7 +4,7 @@
 typedef enum {
   I_NOP,
   
-  I_MOV, I_MOVI, I_FMOVI, I_SWAP, I_STACK,
+  I_MOV, I_MOVI, I_FMOVI, I_SWAP, I_PUSH, I_POP,
  
   //TODO w/carry opcodes. Also CMP/TEST as flags
   I_ADD, I_ADI, I_SUB, I_SBI, 
@@ -70,20 +70,28 @@ typedef enum {
 
 #define GPR(name) core->gpr[GPR_ ## name]
 #define MSR(name) core->msr[MSR_ ## name]
-#define RAM_8(addr) (uint8_t*)(s->ram + (addr))
-#define RAM_16(addr) (uint16_t*)(s->ram + (addr))
-#define RAM_32(addr) (uint32_t*)(s->ram + (addr))
-#define RAM_64(addr) (uint64_t*)(s->ram + (addr))
-#define MEM_8(mem, addr) (uint8_t*)(s->mem + (addr))
-#define MEM_16(mem, addr) (uint16_t*)(s->mem + (addr))
-#define MEM_32(mem, addr) (uint32_t*)(s->mem + (addr))
-#define MEM_64(mem, addr) (uint64_t*)(s->mem + (addr))
+#define GPR_16(id) *(uint16_t*)(core->gpr + REG_OR(insn[id]))
+#define GPR_32(id) *(uint32_t*)(core->gpr + REG_OR(insn[id]))
+#define GPR_64(id) *(uint64_t*)(core->gpr + REG_OR(insn[id]))
+#define MMUS_8(addr) mmu_simple(s, core, addr)
+#define MMUS_16(addr) (uint16_t*) mmu_simple(s, core, addr)
+#define MMUS_32(addr) (uint32_t*) mmu_simple(s, core, addr)
+#define MMUS_64(addr) (uint64_t*) mmu_simple(s, core, addr)
+#define MMUC_8(addr, mode) mmu_complex(s, core, addr, mode)
+#define MMUC_16(addr, mode) (uint16_t*) mmu_complex(s, core, addr, mode)
+#define MMUC_32(addr, mode) (uint32_t*) mmu_complex(s, core, addr, mode)
+#define MMUC_64(addr, mode) (uint64_t*) mmu_complex(s, core, addr, mode)
+#define IMM_16(start) *(uint16_t*)(insn + start)
+#define IMM_32(start) *(uint32_t*)(insn + start)
 
-#define BIT_M(dest, bit, val) dest = (dest & ~(1 << bit)) | (val << bit);
-#define BIT_S(dest, bit) dest |= (1 << bit);
-#define BIT_C(dest, bit) dest &= ~(1 << bit);
-#define BIT_G(src, bit) ((src >> bit) & 1)
+#define BIT_M(dest, bit, val) dest = ((dest) & ~(1 << bit)) | ((val) << bit)
+#define BIT_S(dest, bit) dest |= (1 << bit)
+#define BIT_R(dest, bit) dest &= ~(1 << bit)
+#define BIT_G(src, bit) (((src) >> bit) & 1)
 
+#define REG_OR(on) (0x0F & on)
+#define REG_RM(on) (0x30 & on)
+#define REG_LN(on) (0x40 & on)
 #define M8(on) (0xFFFFFF00 & on)
 #define M10(on) (0xFFFFFC00 & on)
 #define F8 0xFF
@@ -189,5 +197,10 @@ const uint8_t hw_limits[2][PORT_LAST] = {
     [PORT_IO] = 8
   }
 };
+
+void int_simple(hw *s, cpu *core, uint8_t number);
+void int_complex(hw *s, cpu *core, uint8_t number);
+uint8_t *mmu_simple(hw *s, cpu *core, uint16_t addr);
+uint8_t *mmu_complex(hw *s, cpu *core, uint32_t addr, uint8_t mode);
 
 
