@@ -20,12 +20,18 @@ typedef enum {
   I_SHL, I_SHR, I_ROL, I_ROR,
  
   //TODO maybe add SETcc
-  I_INT, I_JMP, I_CALL, I_IJMP, I_ICALL, I_JFL, I_RET,
+  I_INT, I_JMP, I_CALL, I_IJMP, I_ICALL, I_JC, I_JNC, I_RET,
   
+  IP_FLAGS = 0x70,
+
   //TODO maybe make HALT as real opcode
-  I_IO = 0x80, I_IIO, I_CR,
+  I_IN = 0x80, I_OUT, I_IIN, I_IOUT, I_CRLD, I_CRST,
   I_SEI, I_CLI, I_IRET
 } insn;
+
+typedef enum {
+  JC = 0xF0, JO = 0xF1, JZ = 0xF2, JS = 0xF3, JGE = 0x31
+} jfl;
 
 typedef enum {
  GPR_R1, GPR_R2, GPR_R3, GPR_R4, GPR_R5, GPR_R6, GPR_R7, 
@@ -41,11 +47,13 @@ typedef enum {
   MSR_INT,
   MSR_PAGING,
   MSR_PAGE_FAULT,
-  MSR_LAST
+  //RESERVED
+  MSR_LAST = 0x10
 } msr;
 
 //TODO ALU flags
 //TODO Prev task on INT
+#define MSR_ALU_FLAG_MASK 0x0F
 #define MSR_ALU_CF 0
 #define MSR_ALU_OF 1
 #define MSR_ALU_ZF 2
@@ -76,6 +84,7 @@ typedef enum {
 #define GPR_16(id) *(uint16_t*)(core->gpr + REG_OR(insn[id]))
 #define GPR_32(id) *(uint32_t*)(core->gpr + REG_OR(insn[id]))
 #define GPR_64(id) *(uint64_t*)(core->gpr + REG_OR(insn[id]))
+#define MSR_32(id) *(uint32_t*)(core->msr + REG_OR(insn[id]))
 #define MMUS_8(addr) mmu_simple(s, core, addr)
 #define MMUS_16(addr) (uint16_t*) mmu_simple(s, core, addr)
 #define MMUS_32(addr) (uint32_t*) mmu_simple(s, core, addr)
