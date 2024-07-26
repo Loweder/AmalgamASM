@@ -2,7 +2,8 @@
 #include <stdlib.h>
 #include <stdio.h>
 
-uint8_t *rom_builder(void);
+uint8_t *rom_mem(void);
+uint8_t *hw_mem(void);
 
 void *emalloc(size_t size) {
   void *p = malloc(size);
@@ -10,18 +11,6 @@ void *emalloc(size_t size) {
   return p;
 }
 
-static const uint8_t the_rom[0x1000] = {
-  0xAC, 0x36, 0x18, 0xCA,
-  [0x100] = I_MOVI, 0x00, 0x00, 0x10,
-  I_MOVI, 0x01, 0xFE, 0xCA,
-  I_MOVI, 0x02, 0x00, 0x20,
-  I_MOVI, 0x22, 0x40, 0x30,
-  I_MOV, 0x13, 0x02,
-  I_PUSH, 0x01,
-  I_POP, 0x04,
-  I_SWAP, 0x02, 0x04,
-  I_MOV, 0x55, 0x00
-};
 
 static const md_desc cpus[2] = {
   {100}, {100}
@@ -31,7 +20,7 @@ static const md_desc roms[1] = {
   {
     .freq = 100,
     .p_size = 0x1000,
-    .builder = rom_builder,
+    .builder = rom_mem,
     .processor = 0
   }
 };
@@ -40,7 +29,7 @@ static const md_desc rams[1] = {
   {
     .freq = 100,
     .p_size = 0x4000,
-    .builder = rom_builder,
+    .builder = 0,
     .processor = 0
   }
 };
@@ -48,12 +37,11 @@ static const md_desc rams[1] = {
 static const hw_desc device = {
   .md_count = {[MDD_PORT_ROM] = 1, [MDD_PORT_RAM] = 1, [MDD_PORT_CPU] = 2},
   .md = {[MDD_PORT_ROM] = (md_desc*) roms, [MDD_PORT_RAM] = (md_desc*) rams, [MDD_PORT_CPU] = (md_desc*) cpus},
-  .opts = HWD_OPT_COMPLEX
+  .opts = HWD_OPT_COMPLEX,
+  .p_size = 0,
+  .builder = hw_mem,
+  .processor = 0
 };
-
-uint8_t *rom_builder(void) {
-  return (uint8_t*) the_rom;
-}
 
 #define DELIM "------------------------------------------------------------------------------------------------------------------------\n"
 
@@ -79,3 +67,28 @@ ALU: %8X | MODE: %8X | MTASK: %8X | INT: %8X | PAGING: %8X | PAGE-F: %8X\n", i,
     execute(system);
   }
 }
+
+uint8_t *rom_mem(void) {
+  static uint8_t data[0x1000] = {
+    0xAC, 0x36, 0x18, 0xCA,
+    [0x100] = I_MOVI, 0x00, 0x00, 0x10,
+    I_MOVI, 0x01, 0xFE, 0xCA,
+    I_MOVI, 0x02, 0x00, 0x20,
+    I_MOVI, 0x22, 0x40, 0x30,
+    I_MOV, 0x13, 0x02,
+    I_PUSH, 0x01,
+    I_POP, 0x04,
+    I_SWAP, 0x02, 0x04,
+    I_MOV, 0x55, 0x00
+  };
+  return data;
+}
+
+uint8_t *hw_mem(void) {
+
+  static uint8_t data[1] = {
+    0x00
+  };
+  return data;
+}
+

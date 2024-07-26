@@ -21,12 +21,13 @@ typedef enum {
   I_SHL, I_SHR, I_ROL, I_ROR,
  
   //TODO maybe add SETcc
-  I_INT = 0x60, I_JMP, I_CALL, I_IJMP, I_ICALL, I_JC, I_JNC, I_RET,
+  I_INT = 0x60, I_JMP, I_CALL, I_IJMP, I_ICALL, 
+  I_JC, I_JNC, I_MOVC, I_MOVNC, I_RET,
   
   IP_FLAGS = 0xA0,
 
   //TODO maybe make HALT as real opcode
-  I_IN = 0xC0, I_OUT, I_IIN, I_IOUT, I_CRLD, I_CRST,
+  I_IN = 0xC0, I_OUT, I_INI, I_OUTI, I_CRLD, I_CRST,
   I_SEI, I_CLI, I_IRET
 } insn;
 
@@ -99,12 +100,13 @@ typedef enum {
 #define GPR_32(id) *(uint32_t*)(core->gpr + REG_OR(insn[id]))
 #define GPR_64(id) *(uint64_t*)(core->gpr + REG_OR(insn[id]))
 #define MSR_32(id) *(uint32_t*)(core->msr + REG_OR(insn[id]))
-#define MMUS_8(addr) mmu_simple(s, core, addr)
-#define MMUS_16(addr) (uint16_t*) mmu_simple(s, core, addr)
-#define MMUS_32(addr) (uint32_t*) mmu_simple(s, core, addr)
-#define MMUS_64(addr) (uint64_t*) mmu_simple(s, core, addr)
+#define MMUI_8(addr) mmu_io(s, core, addr, 1)
+#define MMUI_16(addr) (uint16_t*) mmu_io(s, core, addr, 2)
+#define MMUI_32(addr) (uint32_t*) mmu_io(s, core, addr, 4)
+#define MMUS_8(addr) mmu_simple(s, core, addr, 1)
+#define MMUS_16(addr) (uint16_t*) mmu_simple(s, core, addr, 2)
+#define MMUS_32(addr) (uint32_t*) mmu_simple(s, core, addr, 4)
 #define MMUC_8(addr, mode) mmu_complex(s, core, addr, mode)
-#define MMUC_16(addr, mode) (uint16_t*) mmu_complex(s, core, addr, mode)
 #define MMUC_32(addr, mode) (uint32_t*) mmu_complex(s, core, addr, mode)
 #define MMUC_64(addr, mode) (uint64_t*) mmu_complex(s, core, addr, mode)
 #define IMM_16(start) *(uint16_t*)(insn + start)
@@ -181,29 +183,36 @@ typedef struct {
 //FIXME convert CPUs to pointers? Or just convert registers? they take like 2KB now
 typedef struct {
   uint32_t status;
-  uint32_t ram_size;
   uint8_t cpu_count;
   uint8_t disk_count;
   uint8_t rom_count;
   uint8_t io_count;
   
-  uint32_t ram_freq;
+  //uint32_t ram_freq;
+  uint32_t ram_size;
   uint32_t disk_size[MDD_C_MAIN_LIMIT];
-  uint32_t disk_freq[MDD_C_MAIN_LIMIT];
+  //uint32_t disk_freq[MDD_C_MAIN_LIMIT];
   uint32_t rom_size[MDD_C_ROM_LIMIT];
-  uint32_t io_freq[MDD_C_IO_LIMIT];
+  uint8_t io_size[MDD_C_IO_LIMIT];
+  uint8_t hw_size;
+  //uint32_t io_freq[MDD_C_IO_LIMIT];
   
   uint8_t *ram;
   uint8_t *disks[MDD_C_MAIN_LIMIT];
-  const uint8_t *roms[MDD_C_ROM_LIMIT];
-  void (*io_proc[MDD_C_IO_LIMIT])(uint16_t, uint8_t*);
+  uint8_t *roms[MDD_C_ROM_LIMIT];
+  uint8_t *ios[MDD_C_IO_LIMIT];
+  proc io_proc[MDD_C_IO_LIMIT];
+  uint8_t *hw_space;
+  proc hw_proc;
   
   cpu cpus[MDD_C_CPU_LIMIT];
 } hw;
 
 void int_simple(hw *s, cpu *core, uint8_t number);
 void int_complex(hw *s, cpu *core, uint8_t number);
-uint8_t *mmu_simple(hw *s, cpu *core, uint16_t addr);
+proc mmu_iopc(hw *s, cpu *core, uint16_t addr);
+uint8_t *mmu_io(hw *s, cpu *core, uint16_t addr, uint8_t size);
+uint8_t *mmu_simple(hw *s, cpu *core, uint16_t addr, uint8_t size);
 uint8_t *mmu_complex(hw *s, cpu *core, uint32_t addr, uint8_t mode);
 hw *build_system(const hw_desc *desc);
 void execute(hw *s);

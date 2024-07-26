@@ -17,6 +17,8 @@
 #define MDD_TEST_LIMIT(type) if (desc->md_count[MDD_PORT_ ## type] > \
     (desc->opts & HWD_OPT_COMPLEX ? MDD_C_ ## type ## _LIMIT : MDD_S_ ## type ## _LIMIT))
 
+typedef void (*proc)(uint16_t, uint8_t*);
+
 typedef enum {
   MDD_PORT_CPU, MDD_PORT_ROM, MDD_PORT_RAM, 
   MDD_PORT_MAIN, MDD_PORT_IO, MDD_PORT_LAST
@@ -30,13 +32,16 @@ typedef struct {
   uint32_t freq;
   uint32_t p_size;
   uint8_t *(*builder)(void);
-  void (*processor)(uint16_t, uint8_t*);
+  proc processor;
 } md_desc;
 
 typedef struct {
   uint32_t opts;
   uint8_t md_count[MDD_PORT_LAST];
   md_desc *md[MDD_PORT_LAST];
+  uint32_t p_size;
+  uint8_t *(*builder)(void);
+  proc processor;
 } hw_desc;
 
 #endif

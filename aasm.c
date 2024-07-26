@@ -8,6 +8,9 @@
   return 0;
 #define ret_intc(intp) int_complex(s, core, INT_ ## intp); \
   return 0;
+#define ret_intm(intp) if (core->status & CPU_COMPLEX) int_complex(s, core, INT_ ## intp); \
+  else int_simple(s, core, INT_ ## intp); \
+  return 0;
 #define ifln(flag) if (REG_LN(insn[flag]))
 #define ifmem(flag) if (REG_RM(insn[flag]))
 
@@ -27,13 +30,11 @@ hw *build_system(const hw_desc *desc) {
 
   if (!(p->status & HW_RAM_OL)) {
     p->ram_size = 0;
-    p->ram_freq = 0;
     for (int i = 0; i < desc->md_count[MDD_PORT_RAM]; i++) {
       md_desc *ram_bank = desc->md[MDD_PORT_RAM] + i;
-      if (p->ram_freq && p->ram_freq != ram_bank->freq) p->status |= HW_RAM_HZ;
+      //if (p->ram_freq && p->ram_freq != ram_bank->freq) p->status |= HW_RAM_HZ;
       if (ram_bank->p_size > 16*1024*1024) p->status |= HW_RAM_MAX;
       if (ram_bank->p_size % 1024) p->status |= HW_RAM_MALF;
-      p->ram_freq = ram_bank->freq;
       p->ram_size += ram_bank->p_size;
     }
     if (!(p->status & (HW_RAM_MAX | HW_RAM_HZ | HW_RAM_MALF))) {
@@ -51,7 +52,6 @@ hw *build_system(const hw_desc *desc) {
     for (int i = 0; i < p->disk_count; i++) {
       md_desc *disk = desc->md[MDD_PORT_MAIN] + i;
       if (disk->p_size % 1024) p->status |= HW_MAIN_MALF;
-      p->disk_freq[i] = disk->freq;
       p->disk_size[i] = disk->p_size;
       p->disks[i] = disk->builder();
       if (!p->disks[i]) p->status |= HW_MALLOC;
@@ -75,8 +75,10 @@ hw *build_system(const hw_desc *desc) {
     p->io_count = desc->md_count[MDD_PORT_IO];
     for (int i = 0; i < p->io_count; i++) {
       md_desc *io = desc->md[MDD_PORT_IO] + i;
-      p->io_freq[i] = io->freq;
+      p->io_size[i] = io->p_size;
       p->io_proc[i] = io->processor;
+      p->ios[i] = io->builder();
+      if (!p->ios[i]) p->status |= HW_MALLOC;
     }
   }
 
@@ -97,7 +99,12 @@ hw *build_system(const hw_desc *desc) {
     p->cpus[0].gpr[GPR_IP] = 0x1100;
     p->cpus[0].msr[MSR_MODE] |= (1 << MSR_MODE_RUNNING);
   }
-  
+ 
+  p->hw_size = desc->p_size;
+  p->hw_proc = desc->processor;
+  p->hw_space = desc->builder();
+  if (!p->hw_space) p->status |= HW_MALLOC;
+
   if (!boot_rom) p->status |= HW_CPU_IP;
   else if (!(p->status & 0xFFFF)) {
     p->status |= HW_RUNNING | HW_STABLE;
@@ -108,12 +115,29 @@ hw *build_system(const hw_desc *desc) {
 
   return p;
 }
-//FIXME potential SEGV when reading last few bytes
-uint8_t *mmu_simple(hw *s, cpu *core, uint16_t addr) {
-  if (s->ram_size > addr) return s->ram + addr;
+
+proc mmu_iopc(hw *s, cpu *core, uint16_t addr) {
+  uint8_t segment = addr / 0x1000;
+  if (segment > s->io_count) {ret_intm(IO)}
+  if (segment == 0) return s->hw_proc;
+  return s->io_proc[segment - 1];
+}
+
+uint8_t *mmu_io(hw *s, cpu *core, uint16_t addr, uint8_t size) {
+  uint8_t segment = addr / 0x1000, seg_size, *seg_data;
+  if (segment > s->io_count) {ret_intm(IO)}
+  if (segment == 0) {seg_size = s->hw_size; seg_data = s->hw_space; }
+  else {seg_size = s->io_size[segment - 1]; seg_data = s->ios[segment - 1]; }
+  if (seg_size >= (addr % 0x1000) + size) return seg_data + (addr % 0x1000);
+  ret_intm(IO);
+}
+
+uint8_t *mmu_simple(hw *s, cpu *core, uint16_t addr, uint8_t size) {
+  if (s->ram_size >= addr + size) return s->ram + addr;
   ret_ints(MR)
 }
 
+//FIXME segv on page edge access
 uint8_t *mmu_complex(hw *s, cpu *core, uint32_t addr, uint8_t task) {
   uint32_t paging = MSR(PAGING);
   uint32_t ram_size = s->ram_size;
@@ -194,7 +218,7 @@ void int_complex(hw *s, cpu *core, uint8_t number) {
 }
 
 void execute_simple(hw *s, cpu *core) {
-  uint8_t *insn = MMUS_8(GPR(IP));
+  uint8_t *insn = mmu_simple(s, core, GPR(IP), 8);
   if (!insn) return;
   uint8_t size = 1;
   uint32_t sleep = 0;
@@ -609,23 +633,110 @@ void execute_simple(hw *s, cpu *core) {
 	size = 4;
 	break;
       }
+    case I_MOVC:
+      {
+	uint8_t op1 = insn[1] & 0x80 ? 1 : BIT_G(MSR(ALU), (insn[1] >> 4) & 0x7);
+	uint8_t op2 = insn[1] & 0x08 ? 1 : BIT_G(MSR(ALU), insn[1] & 0x7);
+	core->sleep = 3;
+	size = 4;
+	if (op1 != op2) { break; }
+	switch(REG_RM(insn[2])) {
+	  case 0x10:
+	    ifln(2) GPR_32(2) = *MMUS_32(GPR_16(3));
+	    else GPR_16(2) = *MMUS_16(GPR_16(3));
+	    break;
+	  case 0x20:
+	    ifln(2) *MMUS_32(GPR_16(2)) = GPR_32(3); 
+	    else *MMUS_16(GPR_16(2)) = GPR_16(3);
+	    break;
+	  default:
+	    ifln(2) GPR_32(2) = GPR_32(3); 
+	    else GPR_16(2) = GPR_16(3);
+	    break;
+	}
+	break;
+      }
+    case I_MOVNC:
+      {
+	uint8_t op1 = insn[1] & 0x80 ? 1 : BIT_G(MSR(ALU), (insn[1] >> 4) & 0x7);
+	uint8_t op2 = insn[1] & 0x08 ? 1 : BIT_G(MSR(ALU), insn[1] & 0x7);
+	core->sleep = 3;
+	size = 4;
+	if (op1 == op2) { break; }
+	switch(REG_RM(insn[2])) {
+	  case 0x10:
+	    ifln(2) GPR_32(2) = *MMUS_32(GPR_16(3));
+	    else GPR_16(2) = *MMUS_16(GPR_16(3));
+	    break;
+	  case 0x20:
+	    ifln(2) *MMUS_32(GPR_16(2)) = GPR_32(3); 
+	    else *MMUS_16(GPR_16(2)) = GPR_16(3);
+	    break;
+	  default:
+	    ifln(2) GPR_32(2) = GPR_32(3); 
+	    else GPR_16(2) = GPR_16(3);
+	    break;
+	}
+	break;
+      }
     case I_RET:
       GPR(IP) = *MMUS_16(GPR(SP)); 
       GPR(SP) += 2;
       return;
 
-
     case I_IN:
-      size = 4;
+      switch(REG_LN(insn[1])) {
+	case 0x40:
+	  ifmem(1) *MMUS_32(GPR_16(1)) = *MMUI_32(GPR_16(2));
+	  else GPR_32(1) = *MMUI_32(GPR_16(2));
+	  break;
+	default:
+	  ifmem(1) *MMUS_16(GPR_16(1)) = *MMUI_16(GPR_16(2));
+	  else GPR_16(1) = *MMUI_16(GPR_16(2));
+	  break;
+      }
+      size = 3;
       break;
     case I_OUT:
+      switch(REG_LN(insn[1])) {
+	case 0x40:
+	  ifmem(1) *MMUI_32(GPR_16(1)) = *MMUS_32(GPR_16(2));
+	  else *MMUI_32(GPR_16(1)) = GPR_32(2);
+	  break;
+	default:
+	  ifmem(1) *MMUI_16(GPR_16(1)) = *MMUS_16(GPR_16(2));
+	  else *MMUI_16(GPR_16(1)) = GPR_16(2);
+	  break;
+      }
+      mmu_iopc(s, core, GPR_16(2));
+      size = 3;
+      break;
+    case I_INI:
+      switch(REG_LN(insn[1])) {
+	case 0x40:
+	  ifmem(1) *MMUS_32(GPR_16(1)) = *MMUI_32(IMM_16(2));
+	  else GPR_32(1) = *MMUI_32(IMM_16(2));
+	  break;
+	default:
+	  ifmem(1) *MMUS_16(GPR_16(1)) = *MMUI_16(IMM_16(2));
+	  else GPR_16(1) = *MMUI_16(IMM_16(2));
+	  break;
+      }
       size = 4;
       break;
-    case I_IIN:
-      size = 3;
-      break;
-    case I_IOUT:
-      size = 3;
+    case I_OUTI:
+      switch(REG_LN(insn[1])) {
+	case 0x40:
+	  ifmem(1) *MMUI_32(IMM_16(1)) = *MMUS_32(GPR_16(3));
+	  else *MMUI_32(IMM_16(1)) = GPR_32(3);
+	  break;
+	default:
+	  ifmem(1) *MMUI_16(IMM_16(1)) = *MMUS_16(GPR_16(3));
+	  else *MMUI_16(IMM_16(1)) = GPR_16(3);
+	  break;
+      }
+      mmu_iopc(s, core, GPR_16(2));
+      size = 4;
       break;
     case I_CRLD:
       ifmem(1) *MMUS_32(GPR_16(1)) = MSR_32(2);
@@ -932,10 +1043,10 @@ void execute_complex(hw *s, cpu *core) {
     case I_OUT:
       size = 4;
       break;
-    case I_IIN:
+    case I_INI:
       size = 3;
       break;
-    case I_IOUT:
+    case I_OUTI:
       size = 3;
       break;
     case I_CRLD:
