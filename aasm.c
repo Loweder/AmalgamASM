@@ -3,8 +3,7 @@
 #include <string.h>
 #include <time.h>
 
-#define check_hw_ol(type) if (desc->md_count[PORT_ ## type] > hw_limits[desc->opts & OPT_COMPLEX][PORT_ ## type]) p->status |= ERR_ ## type ## _OL
-#define check_fq(against) if (p->top_freq < (against)) p->top_freq = (against)
+#define check_hw_ol(type) MDD_TEST_LIMIT(type) p->status |= HW_ ## type ## _OL
 #define ret_ints(intp) int_simple(s, core, INT_ ## intp); \
   return 0;
 #define ret_intc(intp) int_complex(s, core, INT_ ## intp); \
@@ -19,96 +18,93 @@ hw *build_system(const hw_desc *desc) {
   const uint8_t *boot_rom = 0;
 
   p->status = 0;
-  p->top_freq = 0;
 
+  check_hw_ol(CPU);
   check_hw_ol(MAIN);
   check_hw_ol(ROM);
   check_hw_ol(RAM);
   check_hw_ol(IO);
 
-  if (!(p->status & ERR_RAM_OL)) {
+  if (!(p->status & HW_RAM_OL)) {
     p->ram_size = 0;
     p->ram_freq = 0;
-    for (int i = 0; i < desc->md_count[PORT_RAM]; i++) {
-      md_desc *ram_bank = desc->md[PORT_RAM] + i;
-      if (p->ram_freq && p->ram_freq != ram_bank->freq) p->status |= ERR_RAM_HZ;
-      if (ram_bank->p_size > 16*1024*1024) p->status |= ERR_RAM_MAX;
+    for (int i = 0; i < desc->md_count[MDD_PORT_RAM]; i++) {
+      md_desc *ram_bank = desc->md[MDD_PORT_RAM] + i;
+      if (p->ram_freq && p->ram_freq != ram_bank->freq) p->status |= HW_RAM_HZ;
+      if (ram_bank->p_size > 16*1024*1024) p->status |= HW_RAM_MAX;
+      if (ram_bank->p_size % 1024) p->status |= HW_RAM_MALF;
       p->ram_freq = ram_bank->freq;
       p->ram_size += ram_bank->p_size;
-      check_fq(ram_bank->freq);
     }
-    if (!(p->status & ERR_RAM_MAX)) {
+    if (!(p->status & (HW_RAM_MAX | HW_RAM_HZ | HW_RAM_MALF))) {
       if (p->ram_size > 0x2000) {
-	p->ram = malloc(desc->opts & OPT_COMPLEX ? p->ram_size : (p->ram_size > 48*1024 ? 48*1024 : p->ram_size));
-	if (!p->ram) p->status |= ERR_MALLOC;
+	p->ram = malloc(desc->opts & HWD_OPT_COMPLEX ? p->ram_size : (p->ram_size > 48*1024 ? 48*1024 : p->ram_size));
+	if (!p->ram) p->status |= HW_MALLOC;
       } else {
-	p->status |= ERR_RAM_MIN;
+	p->status |= HW_RAM_MIN;
       }
     }
   }
 
-  if (!(p->status & ERR_MAIN_OL)) {
-    p->disk_count = desc->md_count[PORT_MAIN];
+  if (!(p->status & HW_MAIN_OL)) {
+    p->disk_count = desc->md_count[MDD_PORT_MAIN];
     for (int i = 0; i < p->disk_count; i++) {
-      md_desc *disk = desc->md[PORT_MAIN] + i;
+      md_desc *disk = desc->md[MDD_PORT_MAIN] + i;
+      if (disk->p_size % 1024) p->status |= HW_MAIN_MALF;
       p->disk_freq[i] = disk->freq;
       p->disk_size[i] = disk->p_size;
       p->disks[i] = disk->builder();
-      check_fq(disk->freq);
-      if (!p->disks[i]) p->status |= ERR_MALLOC;
+      if (!p->disks[i]) p->status |= HW_MALLOC;
     }
   }
 
-  if (!(p->status & ERR_ROM_OL)) {
-    p->rom_count = desc->md_count[PORT_ROM];
+  if (!(p->status & HW_ROM_OL)) {
+    p->rom_count = desc->md_count[MDD_PORT_ROM];
     for (int i = 0; i < p->rom_count; i++) {
-      md_desc *rom = desc->md[PORT_ROM] + i;
+      md_desc *rom = desc->md[MDD_PORT_ROM] + i;
+      if (rom->p_size % 1024) p->status |= HW_ROM_MALF;
       p->rom_size[i] = rom->p_size;
       p->roms[i] = rom->builder();
-      if (!p->roms[i]) p->status |= ERR_MALLOC;
+      if (!p->roms[i]) p->status |= HW_MALLOC;
       else if (rom->p_size > 0 && rom->p_size % 4096 == 0 && *((uint32_t*)p->roms[i]) == 0xCA1836AC)
 	boot_rom = p->roms[i];
     }
   }
 
-  if (!(p->status & ERR_IO_OL)) {
-    p->io_count = desc->md_count[PORT_IO];
+  if (!(p->status & HW_IO_OL)) {
+    p->io_count = desc->md_count[MDD_PORT_IO];
     for (int i = 0; i < p->io_count; i++) {
-      md_desc *io = desc->md[PORT_IO] + i;
+      md_desc *io = desc->md[MDD_PORT_IO] + i;
       p->io_freq[i] = io->freq;
       p->io_proc[i] = io->processor;
-      check_fq(io->freq);
     }
   }
 
-  if ((!(desc->opts & OPT_COMPLEX) && desc->cpu_count > 1) || desc->cpu_count > 8)
-    p->status |= ERR_CPU_OL;
-  else {
-    p->cpu_count = desc->cpu_count;
-    p->cpus = malloc(sizeof(cpu)*p->cpu_count);
-    if (!p->cpus) p->status |= ERR_MALLOC;
-    else {
-      for (int i = 0; i < p->cpu_count; i++) {
-	cpu *core = p->cpus + i;
-	core->max_freq = core->freq = desc->cpus[i].freq;
-	check_fq(core->freq);
-	for (int j = 0; j < GPR_LAST; j++) core->gpr[j] = 0;
-	for (int j = 0; j < MSR_LAST; j++) core->msr[j] = 0;
-	MSR(MODE) = (i << MSR_MODE_COREID) & MSR_MODE_COREID_MASK;
-	MSR(MODE) |= (1 << MSR_MODE_KERNEL);
-	GPR(SP) = p->ram_size;
-	GPR(BP) = p->ram_size;
-      }
-      p->cpus[0].gpr[GPR_IP] = 0x1100;
-      p->cpus[0].msr[MSR_MODE] |= (1 << MSR_MODE_RUNNING);
+  if (!(p->status & HW_CPU_OL)) {
+    p->cpu_count = desc->md_count[MDD_PORT_CPU];
+    for (int i = 0; i < p->cpu_count; i++) {
+      cpu *core = p->cpus + i;
+      core->status = 0;
+      core->max_freq = core->freq = desc->md[MDD_PORT_CPU][i].freq;
+      for (int j = 0; j < GPR_LAST; j++) core->gpr[j] = 0;
+      for (int j = 0; j < MSR_LAST; j++) core->msr[j] = 0;
+      MSR(MODE) = (i << MSR_MODE_COREID) & MSR_MODE_COREID_MASK;
+      MSR(MODE) |= (1 << MSR_MODE_KERNEL);
+      GPR(SP) = p->ram_size;
+      GPR(BP) = p->ram_size;
     }
+    p->cpus[0].status |= CPU_RUNNING;
+    p->cpus[0].gpr[GPR_IP] = 0x1100;
+    p->cpus[0].msr[MSR_MODE] |= (1 << MSR_MODE_RUNNING);
   }
   
-  if (!boot_rom) p->status |= ERR_CPU_IP;
+  if (!boot_rom) p->status |= HW_CPU_IP;
   else if (!(p->status & 0xFFFF)) {
-    p->status |= STATE_RUNNING | STATE_STABLE;
+    p->status |= HW_RUNNING | HW_STABLE;
     memcpy(p->ram + 0x1000, boot_rom, 0x1000);
   }
+  
+  if (desc->opts & HWD_OPT_COMPLEX) p->status |= HW_COMPLEX;
 
   return p;
 }
@@ -153,25 +149,40 @@ uint8_t *mmu_complex(hw *s, cpu *core, uint32_t addr, uint8_t task) {
 }
 
 void int_simple(hw *s, cpu *core, uint8_t number) {
-  if (!BIT_G(MSR(ALU), MSR_ALU_IF)) return;
+  if ((!BIT_G(MSR(ALU), MSR_ALU_IF) && number >= 0x20) || core->status & CPU_INT_R_FS) return;
+  core->status |= CPU_INT_R_FS;
   BIT_R(MSR(ALU), MSR_ALU_IF);
+  if (core->status & CPU_ASLEEP) {
+    core->status &= ~CPU_ASLEEP;
+    core->sleep = 0;
+  }
   uint16_t *ivt = (uint16_t*) s->ram;
   uint16_t *stack = MMUS_16(GPR(SP) -= 2);
   if (!stack) {
+    core->status |= CPU_INT_FAIL;
+    core->status &= ~(CPU_RUNNING | CPU_INT_R_FS);
     BIT_R(MSR(MODE), MSR_MODE_RUNNING);
     return;
   }
   *stack = GPR(IP);
   GPR(IP) = ivt[number*2];
+  core->status &= ~CPU_INT_R_FS;
 }
 
 void int_complex(hw *s, cpu *core, uint8_t number) {
-  if (!BIT_G(MSR(ALU), MSR_ALU_IF)) return;
+  if ((!BIT_G(MSR(ALU), MSR_ALU_IF) && number >= 0x20) || core->status & CPU_INT_R_FS) return;
+  core->status |= CPU_INT_R_FS;
   uint32_t intp = MSR(INT);
   BIT_R(MSR(ALU), MSR_ALU_IF);
+  if (core->status & CPU_ASLEEP) {
+    core->status &= ~CPU_ASLEEP;
+    core->sleep = 0;
+  }
   uint32_t *idt = MMUC_32(M10(intp), MMU_READ);
   uint32_t *stack = MMUC_32(GPR(SP) -= 4, MMU_WRITE);
   if (!idt || !stack) {
+    core->status |= CPU_INT_FAIL;
+    core->status &= ~(CPU_RUNNING | CPU_INT_R_FS);
     BIT_R(MSR(MODE), MSR_MODE_RUNNING);
     return;
   }
@@ -179,15 +190,33 @@ void int_complex(hw *s, cpu *core, uint8_t number) {
   GPR(IP) = *(idt + number);
   BIT_M(MSR(INT), MSR_INT_KERNEL, BIT_G(MSR(MODE), MSR_MODE_KERNEL));
   BIT_S(MSR(MODE), MSR_MODE_KERNEL);
+  core->status &= ~CPU_INT_R_FS;
 }
 
 void execute_simple(hw *s, cpu *core) {
   uint8_t *insn = MMUS_8(GPR(IP));
   if (!insn) return;
   uint8_t size = 1;
+  uint32_t sleep = 0;
   switch (insn[0]) {
     case I_NOP:
       size = 1;
+      break;
+    case I_SLEEP:
+      core->status |= CPU_ASLEEP;
+      ifmem(1) sleep = *MMUS_16(GPR_16(1));
+      else sleep = GPR_16(1);
+      size = 2;
+      break;
+    case I_SLEEPI:
+      core->status |= CPU_ASLEEP;
+      sleep = IMM_16(1);
+      size = 3;
+      break;
+    case I_GIPC:
+      ifmem(1) *MMUS_32(GPR_16(1)) = core->ip_count;
+      else GPR_32(1) = core->ip_count;
+      size = 2;
       break;
 
 
@@ -294,6 +323,7 @@ void execute_simple(hw *s, cpu *core) {
 	  GPR_32(1) *= GPR_16(2);
 	  break;
       }
+      sleep = 1;
       size = 3;
       break;
     case I_DIV:
@@ -311,6 +341,7 @@ void execute_simple(hw *s, cpu *core) {
 	  else GPR_16(1) /= GPR_16(2);
 	  break;
       }
+      sleep = 7;
       size = 3;
       break;
     case I_MOD:
@@ -328,6 +359,7 @@ void execute_simple(hw *s, cpu *core) {
 	  else GPR_16(1) %= GPR_16(2);
 	  break;
       }
+      sleep = 7;
       size = 3;
       break;
     case I_INC:
@@ -537,28 +569,34 @@ void execute_simple(hw *s, cpu *core) {
 
     case I_INT:
       int_simple(s, core, insn[1]);
+      core->sleep = 1;
       return;
     case I_JMP:
       GPR(IP) = IMM_16(1);
+      core->sleep = 1;
       return;
     case I_CALL:
       *MMUS_16(GPR(SP) -= 2) = GPR(IP);
       GPR(IP) = IMM_16(1);
+      core->sleep = 1;
       return;
     case I_IJMP:
       ifmem(1) GPR(IP) = *MMUS_16(GPR_16(1));
       else GPR(IP) = GPR_16(1);
+      core->sleep = 1;
       return;
     case I_ICALL:
       *MMUS_16(GPR(SP) -= 2) = GPR(IP);
       ifmem(1) GPR(IP) = *MMUS_16(GPR_16(1));
       else GPR(IP) = GPR_16(1);
+      core->sleep = 1;
       return;
     case I_JC:
       {
 	uint8_t op1 = insn[1] & 0x80 ? 1 : BIT_G(MSR(ALU), (insn[1] >> 4) & 0x7);
 	uint8_t op2 = insn[1] & 0x08 ? 1 : BIT_G(MSR(ALU), insn[1] & 0x7);
 	if (op1 == op2) { GPR(IP) = IMM_16(2); return; }
+	core->sleep = 3;
 	size = 4;
 	break;
       }
@@ -567,6 +605,7 @@ void execute_simple(hw *s, cpu *core) {
 	uint8_t op1 = insn[1] & 0x80 ? 1 : BIT_G(MSR(ALU), (insn[1] >> 4) & 0x7);
 	uint8_t op2 = insn[1] & 0x08 ? 1 : BIT_G(MSR(ALU), insn[1] & 0x7);
 	if (op1 != op2) { GPR(IP) = IMM_16(2); return; }
+	core->sleep = 3;
 	size = 4;
 	break;
       }
@@ -596,6 +635,7 @@ void execute_simple(hw *s, cpu *core) {
     case I_CRST:
       ifmem(1) MSR_32(2) = *MMUS_32(GPR_16(1));
       else MSR_32(1) = GPR_32(2);
+      core->status |= CPU_DIRTY;
       size = 3;
       break;
 
@@ -729,19 +769,21 @@ void execute_simple(hw *s, cpu *core) {
 	  int_simple(s, core, INT_IL);
 	  return;
       }
+      sleep = 1;
       break;
 
     default:
       int_simple(s, core, INT_IL);
       return;
   }
+  core->sleep = sleep;
   GPR(IP) += size;
 }
 
 void execute_complex(hw *s, cpu *core) {
   uint8_t *insn = MMUC_8(GPR(IP), MMU_EXEC);
   if (!insn) return;
-  if (insn[0] & 0x80 && !BIT_G(MSR(MODE), MSR_MODE_KERNEL)) {
+  if (((insn[0] & 0xC0) == 0xC0) && !BIT_G(MSR(MODE), MSR_MODE_KERNEL)) {
     int_complex(s, core, INT_GP);
     return;
   }
@@ -922,11 +964,31 @@ void execute_complex(hw *s, cpu *core) {
 void execute(hw *s) {
   for (int i = 0; i < s->cpu_count; i++) {
     cpu *core = s->cpus + i;
-    if (BIT_G(MSR(MODE), MSR_MODE_RUNNING)) {
-      if (BIT_G(MSR(MODE), MSR_MODE_COMPLEX))
-	execute_complex(s, core);
-      else
-	execute_simple(s, core);
+    if (core->status & CPU_RUNNING) {
+      core->ip_count++;
+      if (core->status & CPU_TIMER1) {
+	MSR(TIMERC1)--;
+	if (MSR(TIMERC1) == 0) { 
+	  if (core->status & CPU_COMPLEX) int_complex(s, core, INT_TIMER1);
+	  else int_simple(s, core, INT_TIMER1);
+	  MSR(TIMERC1) = MASK_G(MSR(TIMER1), MSR_TIMER_VALUE) << MASK_G(MSR(TIMER1), MSR_TIMER_MULT);
+	}
+      }
+      if (core->status & CPU_TIMER2) {
+	MSR(TIMERC2)--;	
+	if (MSR(TIMERC2) == 0) { 
+	  if (core->status & CPU_COMPLEX) int_complex(s, core, INT_TIMER2);
+	  else int_simple(s, core, INT_TIMER2);
+	  MSR(TIMERC2) = MASK_G(MSR(TIMER2), MSR_TIMER_VALUE) << MASK_G(MSR(TIMER2), MSR_TIMER_MULT);
+	}
+      }
+      if (core->sleep > 0) {
+	core->sleep--;
+	if (core->sleep == 0) core->status &= ~CPU_ASLEEP;
+	continue;
+      }
+      if (core->status & CPU_COMPLEX) execute_complex(s, core);
+      else execute_simple(s, core);
     }
   } 
 }

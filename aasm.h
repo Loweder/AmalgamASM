@@ -1,37 +1,38 @@
-#include <stdint.h>
-
 #ifndef AMALGAM_ASM
 #define AMALGAM_ASM
 
+#include <stdint.h>
+#include "aasm/hw.h"
+
 //TODO add more complex things like LEA
 typedef enum {
-  I_NOP,
+  I_NOP = 0x00, I_SLEEP, I_SLEEPI, I_GIPC,
   
-  I_MOV, I_MOVI, I_FMOVI, I_SWAP, I_PUSH, I_POP,
+  I_MOV = 0x10, I_MOVI, I_FMOVI, I_SWAP, I_PUSH, I_POP,
  
   //TODO w/carry opcodes. Also CMP/TEST as flags
-  I_ADD, I_ADI, I_SUB, I_SBI, 
+  I_ADD = 0x20, I_ADI, I_SUB, I_SBI, 
   I_MUL, I_DIV, I_MOD, I_INC, I_DEC, 
   I_FADD, I_FSUB, I_FMUL, I_FDIV,
   I_I2F, I_F2I,
 
-  I_XOR, I_XORI, I_OR, I_ORI, I_AND, I_ANDI, I_NOT, 
+  I_XOR = 0x40, I_XORI, I_OR, I_ORI, I_AND, I_ANDI, I_NOT, 
   I_BTS, I_BTR, I_BTC,
   I_SHL, I_SHR, I_ROL, I_ROR,
  
   //TODO maybe add SETcc
-  I_INT, I_JMP, I_CALL, I_IJMP, I_ICALL, I_JC, I_JNC, I_RET,
+  I_INT = 0x60, I_JMP, I_CALL, I_IJMP, I_ICALL, I_JC, I_JNC, I_RET,
   
-  IP_FLAGS = 0x70,
+  IP_FLAGS = 0xA0,
 
   //TODO maybe make HALT as real opcode
-  I_IN = 0x80, I_OUT, I_IIN, I_IOUT, I_CRLD, I_CRST,
+  I_IN = 0xC0, I_OUT, I_IIN, I_IOUT, I_CRLD, I_CRST,
   I_SEI, I_CLI, I_IRET
 } insn;
 
 typedef enum {
   JC = 0xF0, JO = 0xF1, JZ = 0xF2, JS = 0xF3, JGE = 0x31
-} jfl;
+} jcc;
 
 typedef enum {
  GPR_R1, GPR_R2, GPR_R3, GPR_R4, GPR_R5, GPR_R6, GPR_R7, 
@@ -47,12 +48,26 @@ typedef enum {
   MSR_INT,
   MSR_PAGING,
   MSR_PAGE_FAULT,
+  MSR_TIMER1,
+  MSR_TIMER2,
+  MSR_TIMERC1,
+  MSR_TIMERC2,
   //RESERVED
   MSR_LAST = 0x10
 } msr;
 
-//TODO ALU flags
-//TODO Prev task on INT
+typedef enum {
+  INT_GP,
+  INT_MR,
+  INT_PF,
+  INT_IO,
+  INT_IL,
+  INT_TIMER1 = 0x20,
+  INT_TIMER2
+} intp;
+
+//TODO More ALU flags
+//TODO task switching
 #define MSR_ALU_FLAG_MASK 0x0F
 #define MSR_ALU_CF 0
 #define MSR_ALU_OF 1
@@ -72,12 +87,11 @@ typedef enum {
 #define MSR_MTASK_PRIO_MASK 0xFF00
 #define MSR_MTASK_ADDR 16
 #define MSR_MTASK_ADDR_MASK 0xFFFFFF0000
-
-#define INT_GP 0
-#define INT_MR 1
-#define INT_PF 2
-#define INT_IO 3
-#define INT_IL 4
+#define MSR_TIMER_ON 0
+#define MSR_TIMER_MULT 4
+#define MSR_TIMER_MULT_MASK 0x70
+#define MSR_TIMER_VALUE 8
+#define MSR_TIMER_VALUE_MASK 0xFFFFFF00
 
 #define GPR(name) core->gpr[GPR_ ## name]
 #define MSR(name) core->msr[MSR_ ## name]
@@ -100,6 +114,7 @@ typedef enum {
 #define BIT_S(dest, bit) dest |= (1 << bit)
 #define BIT_R(dest, bit) dest &= ~(1 << bit)
 #define BIT_G(src, bit) (((src) >> bit) & 1)
+#define MASK_G(src, name) (((src) & name ## _MASK) >> name)
 
 #define REG_OR(on) (0x0F & on)
 #define REG_RM(on) (0x30 & on)
@@ -121,93 +136,70 @@ typedef enum {
 #define PG_MMU_PE(addr) ((addr & 0x0003FC00) >> 8)
 #define PG_MMU_ADDR(addr) (addr & 0x000003FF)
 
+//TODO add more states
 typedef enum {
-  PORT_ROM, PORT_RAM, PORT_MAIN, PORT_IO, PORT_LAST
-} port_type;
+  CPU_INT_FAIL 	= 0x0001,
+  CPU_INT_R_FS 	= 0x0002,
+  CPU_RUNNING 	= 0x00020000,
+  CPU_COMPLEX 	= 0x00040000,
+  CPU_ASLEEP 	= 0x00080000,
+  CPU_DIRTY 	= 0x00100000,
+  CPU_TIMER1 	= 0x00200000,
+  CPU_TIMER2	= 0x00400000
+} cpu_state;
 
 typedef enum {
-  ERR_RAM_HZ = 0x0001, 
-  ERR_RAM_MAX = 0x0002, 
-  ERR_RAM_MIN = 0x0004, 
-  ERR_MAIN_OL = 0x0008, 
-  ERR_ROM_OL = 0x0010, 
-  ERR_RAM_OL = 0x0020, 
-  ERR_IO_OL = 0x0040,
-  ERR_CPU_OL = 0x0100,
-  ERR_CPU_IP = 0x0200,
-  ERR_MALLOC = 0x8000,
-  STATE_STABLE = 0x00010000,
-  STATE_RUNNING = 0x00020000
+  HW_RAM_HZ 	= 0x0001, 
+  HW_RAM_MAX 	= 0x0002, 
+  HW_RAM_MIN 	= 0x0004, 
+  HW_MAIN_OL 	= 0x0008, 
+  HW_ROM_OL 	= 0x0010, 
+  HW_RAM_OL 	= 0x0020, 
+  HW_IO_OL 	= 0x0040,
+  HW_CPU_OL 	= 0x0080,
+  HW_CPU_IP 	= 0x0100,
+  HW_MAIN_MALF 	= 0x0200,
+  HW_ROM_MALF 	= 0x0400,
+  HW_RAM_MALF 	= 0x0800,
+  HW_MALLOC 	= 0x8000,
+  HW_STABLE 	= 0x00010000,
+  HW_RUNNING 	= 0x00020000,
+  HW_COMPLEX 	= 0x00040000
 } hw_state;
 
-typedef enum {
-  OPT_COMPLEX = 0x0001
-} hw_opt;
-
 typedef struct {
-  uint32_t freq;
-  uint32_t p_size;
-  uint8_t *(*builder)(void);
-  void (*processor)(uint16_t, uint8_t*);
-} md_desc;
-
-typedef struct {
-  uint32_t freq;
-} cpu_desc;
-
-typedef struct {
-  uint32_t opts;
-  uint8_t cpu_count;
-  cpu_desc *cpus;
-  uint8_t md_count[PORT_LAST];
-  md_desc *md[PORT_LAST];
-} hw_desc;
-
-typedef struct {
+  uint32_t status;
   uint32_t max_freq;
   uint32_t freq;
+  uint32_t sleep;
+  uint64_t ip_count;
   uint64_t gpr[GPR_LAST];
   uint32_t msr[MSR_LAST];
 } cpu;
 
+//Whatever you do, DO NOT USE DIRECTLY WITHOUT A POINTER
+//FIXME convert CPUs to pointers? Or just convert registers? they take like 2KB now
 typedef struct {
   uint32_t status;
-  uint32_t top_freq;
-  uint8_t cpu_count;
-  cpu *cpus;
-
   uint32_t ram_size;
-  uint32_t ram_freq;
-  uint8_t *ram;
-  
+  uint8_t cpu_count;
   uint8_t disk_count;
-  uint32_t disk_size[4];
-  uint32_t disk_freq[4];
-  uint8_t *disks[4];
-  
   uint8_t rom_count;
-  uint32_t rom_size[4];
-  const uint8_t *roms[4];
-
   uint8_t io_count;
-  uint32_t io_freq[8];
-  void (*io_proc[8])(uint16_t, uint8_t*);
+  
+  uint32_t ram_freq;
+  uint32_t disk_size[MDD_C_MAIN_LIMIT];
+  uint32_t disk_freq[MDD_C_MAIN_LIMIT];
+  uint32_t rom_size[MDD_C_ROM_LIMIT];
+  uint32_t io_freq[MDD_C_IO_LIMIT];
+  
+  uint8_t *ram;
+  uint8_t *disks[MDD_C_MAIN_LIMIT];
+  const uint8_t *roms[MDD_C_ROM_LIMIT];
+  void (*io_proc[MDD_C_IO_LIMIT])(uint16_t, uint8_t*);
+  
+  cpu cpus[MDD_C_CPU_LIMIT];
 } hw;
-
-static const uint8_t hw_limits[2][PORT_LAST] = {
-  {
-    [PORT_MAIN] = 1,
-    [PORT_ROM] = 1,
-    [PORT_RAM] = 2,
-    [PORT_IO] = 4
-  },
-  {
-    [PORT_MAIN] = 4,
-    [PORT_ROM] = 4,
-    [PORT_RAM] = 4,
-    [PORT_IO] = 8
-  }
-};
 
 void int_simple(hw *s, cpu *core, uint8_t number);
 void int_complex(hw *s, cpu *core, uint8_t number);

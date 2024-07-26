@@ -13,13 +13,13 @@ LD = ld
 SRC = main.c aasm.c compiler.c
 OBJ = ${SRC:.c=.o}
 
-aasm: ${OBJ}
+aasm.out: ${OBJ}
 	${CC} -o $@ ${OBJ} ${LDFLAGS}
 	
 %.o: %.c
 	${CC} -c ${CFLAGS} -o $@ $<
 
 clean:
-	rm -f aasm ${OBJ}
+	rm -f aasm.out ${OBJ}
 
 .PHONY: clean aasm

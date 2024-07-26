@@ -23,7 +23,7 @@ static const uint8_t the_rom[0x1000] = {
   I_MOV, 0x55, 0x00
 };
 
-static const cpu_desc cpus[2] = {
+static const md_desc cpus[2] = {
   {100}, {100}
 }; 
 
@@ -46,29 +46,29 @@ static const md_desc rams[1] = {
 };
 
 static const hw_desc device = {
-  .cpu_count = 2,
-  .cpus = (cpu_desc*) cpus,
-  .md_count = {[PORT_ROM] = 1, [PORT_RAM] = 1},
-  .md = {[PORT_ROM] = (md_desc*) roms, [PORT_RAM] = (md_desc*) rams},
-  .opts = OPT_COMPLEX
+  .md_count = {[MDD_PORT_ROM] = 1, [MDD_PORT_RAM] = 1, [MDD_PORT_CPU] = 2},
+  .md = {[MDD_PORT_ROM] = (md_desc*) roms, [MDD_PORT_RAM] = (md_desc*) rams, [MDD_PORT_CPU] = (md_desc*) cpus},
+  .opts = HWD_OPT_COMPLEX
 };
 
 uint8_t *rom_builder(void) {
   return (uint8_t*) the_rom;
 }
 
+#define DELIM "------------------------------------------------------------------------------------------------------------------------\n"
+
 int main(void) {
   hw *system = build_system(&device);
 
-  if (!(system->status & STATE_RUNNING)) {
-    printf("System build failed: %X", system->status);
+  if (!(system->status & HW_RUNNING)) {
+    printf("System build failed: %X\n", system->status);
     return -1;
   }
   while (1) {
-    printf("----------------------------------------\nSystem State:\n");
+    printf(DELIM "System State:\n");
     for (int i = 0; i < system->cpu_count; i++) {
       cpu *core = system->cpus + i;
-      printf("Core %i:\nR1: %8lX | R2: %8lX | R3: %8lX | R4: %8lX | R5: %8lX | R6: %8lX | R7: %8lX | R8: %8lX\n\
+      printf(DELIM "Core %i:\nR1: %8lX | R2: %8lX | R3: %8lX | R4: %8lX | R5: %8lX | R6: %8lX | R7: %8lX | R8: %8lX\n\
 R9: %8lX | 10: %8lX | 11: %8lX | 12: %8lX | 13: %8lX | BP: %8lX | SP: %8lX | IP: %8lX\n\n\
 ALU: %8X | MODE: %8X | MTASK: %8X | INT: %8X | PAGING: %8X | PAGE-F: %8X\n", i, 
 	  GPR(R1), GPR(R2), GPR(R3), GPR(R4), GPR(R5), GPR(R6), GPR(R7), GPR(R8), 

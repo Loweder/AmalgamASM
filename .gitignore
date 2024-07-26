@@ -1,5 +1,6 @@
 .cache/
 *.o
+*.out
 *.swp
-aasm
+Session.vim
 compile_commands.json
