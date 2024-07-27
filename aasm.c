@@ -1,4 +1,4 @@
-#include "aasm.h"
+#include "aasm/aasm.h"
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
@@ -14,7 +14,6 @@
 #define ifln(flag) if (REG_LN(insn[flag]))
 #define ifmem(flag) if (REG_RM(insn[flag]))
 
-//TODO make use of new MACROs
 hw *build_system(const hw_desc *desc) {
   hw *p = malloc(sizeof(hw));
   if (!p) return 0;
@@ -136,7 +135,6 @@ uint8_t *mmu_simple(hw *s, cpu *core, uint16_t addr, uint8_t size) {
   if (s->ram_size >= addr + size) return s->ram + addr;
   ret_ints(MR)
 }
-
 //FIXME segv on page edge access
 uint8_t *mmu_complex(hw *s, cpu *core, uint32_t addr, uint8_t task) {
   uint32_t paging = MSR(PAGING);
@@ -1100,6 +1098,10 @@ void execute(hw *s) {
       }
       if (core->status & CPU_COMPLEX) execute_complex(s, core);
       else execute_simple(s, core);
+      if (core->status & CPU_DIRTY) {
+	core->status &= ~CPU_DIRTY;
+	//TODO update CPU props
+      }
     }
   } 
 }

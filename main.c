@@ -1,16 +1,12 @@
-#include "aasm.h"
+#include "aasm/aasm.h"
+#include "aasm/compile.h"
+#include "aasm/util.h"
 #include <stdlib.h>
 #include <stdio.h>
 
+const char *get_file(const char *name);
 uint8_t *rom_mem(void);
 uint8_t *hw_mem(void);
-
-void *emalloc(size_t size) {
-  void *p = malloc(size);
-  if (!p) exit(-1);
-  return p;
-}
-
 
 static const md_desc cpus[2] = {
   {100}, {100}
@@ -45,7 +41,22 @@ static const hw_desc device = {
 
 #define DELIM "------------------------------------------------------------------------------------------------------------------------\n"
 
+static cmpl_env env = {
+  .get_file = get_file
+};
+
 int main(void) {
+  FILE *file = fopen("test/asm/main.s", "r");
+  fseek(file, 0L, SEEK_END);
+  size_t size = ftell(file);
+  char *data = emalloc(size);
+  rewind(file);
+  fread(data, size, 1, file);
+  fclose(file);
+  printf("%s\n", preprocess(data, &env));
+}
+
+int main_i(void) {
   hw *system = build_system(&device);
 
   if (!(system->status & HW_RUNNING)) {
@@ -92,3 +103,16 @@ uint8_t *hw_mem(void) {
   return data;
 }
 
+const char *get_file(const char *name) {
+  char *full_name = emalloc(256);
+  snprintf(full_name, 256, "test/asm/%s", name);
+  FILE *file = fopen(full_name, "r");
+  fseek(file, 0L, SEEK_END);
+  size_t size = ftell(file);
+  char *data = emalloc(size);
+  rewind(file);
+  fread(data, size, 1, file);
+  fclose(file);
+  free(full_name);
+  return data;
+}

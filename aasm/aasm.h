@@ -2,7 +2,7 @@
 #define AMALGAM_ASM
 
 #include <stdint.h>
-#include "aasm/hw.h"
+#include "hw.h"
 
 //TODO add more complex things like LEA
 typedef enum {
@@ -10,7 +10,7 @@ typedef enum {
   
   I_MOV = 0x10, I_MOVI, I_FMOVI, I_SWAP, I_PUSH, I_POP,
  
-  //TODO w/carry opcodes. Also CMP/TEST as flags
+  //TODO w/carry opcodes
   I_ADD = 0x20, I_ADI, I_SUB, I_SBI, 
   I_MUL, I_DIV, I_MOD, I_INC, I_DEC, 
   I_FADD, I_FSUB, I_FMUL, I_FDIV,
@@ -20,13 +20,11 @@ typedef enum {
   I_BTS, I_BTR, I_BTC,
   I_SHL, I_SHR, I_ROL, I_ROR,
  
-  //TODO maybe add SETcc
   I_INT = 0x60, I_JMP, I_CALL, I_IJMP, I_ICALL, 
   I_JC, I_JNC, I_MOVC, I_MOVNC, I_RET,
   
   IP_FLAGS = 0xA0,
 
-  //TODO maybe make HALT as real opcode
   I_IN = 0xC0, I_OUT, I_INI, I_OUTI, I_CRLD, I_CRST,
   I_SEI, I_CLI, I_IRET
 } insn;

@@ -4,13 +4,13 @@ INCS =
 LIBS =
 
 CPPFLAGS = -D_DEFAULT_SOURCE -D_BSD_SOURCE -D_POSIX_C_SOURCE=200809L
-CFLAGS   = -std=c99 -pedantic -Wall -Wno-deprecated-declarations -O3 ${INCS} ${CPPFLAGS}
+CFLAGS   = -std=c99 -pedantic -Wall -Wno-deprecated-declarations -g ${INCS} ${CPPFLAGS}
 LDFLAGS  = ${LIBS}
 
 CC = cc
 LD = ld
 
-SRC = main.c aasm.c compiler.c
+SRC = main.c aasm.c compile.c util.c
 OBJ = ${SRC:.c=.o}
 
 aasm.out: ${OBJ}
