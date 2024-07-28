@@ -42,18 +42,32 @@ static const hw_desc device = {
 #define DELIM "------------------------------------------------------------------------------------------------------------------------\n"
 
 static cmpl_env env = {
-  .get_file = get_file
+  .get_file = get_file,
 };
 
 int main(void) {
-  FILE *file = fopen("test/asm/main.s", "r");
-  fseek(file, 0L, SEEK_END);
-  size_t size = ftell(file);
-  char *data = emalloc(size);
-  rewind(file);
-  fread(data, size, 1, file);
-  fclose(file);
-  printf("%s\n", preprocess(data, &env));
+  env.err = emalloc(100);
+  l_list *product = preprocess("main.s", &env);
+  if (!product) {
+    printf("Preprocess error in %s\n", env.err);
+    return -1;
+  }
+  while (product->data) {
+    l_list *line = ll_shift(product);
+    char *file_name = ll_shift(line);
+    size_t line_number = (size_t) ll_shift(line);
+
+    printf("%s:%ld ", file_name, line_number);
+    free(file_name);
+
+    while(line->data) {
+      char *word = ll_shift(line);
+      printf("%s ", word);
+      free(word);
+    }
+    printf("\n");
+    ll_free(line);
+  }
 }
 
 int main_i(void) {

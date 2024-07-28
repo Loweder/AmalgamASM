@@ -85,6 +85,19 @@ void hs_free(hashset *set) {
     while (bucket) {
       s_bucket = bucket;
       bucket = bucket->next;
+      free(s_bucket);
+    }
+  }
+  free(set->buckets);
+  free(set);
+}
+
+void hs_free_val(hashset *set) {
+  for (int i = 0; i < set->capacity; i++) {
+    struct _lke *bucket = set->buckets[i], *s_bucket;
+    while (bucket) {
+      s_bucket = bucket;
+      bucket = bucket->next;
       free((void*)s_bucket->str);
       free(s_bucket);
     }
@@ -111,7 +124,7 @@ uint8_t hm_contains(const hashmap *map, const char *str) {
   return 0;
 }
 
-void hm_put(hashmap *map, const char *str, const char *value) {
+void hm_put(hashmap *map, const char *str, void *value) {
   uint64_t s_hash = hash(str);
   struct _lkee *bucket = NEW(struct _lkee);
   bucket->next = map->buckets[s_hash % map->capacity];
@@ -123,7 +136,7 @@ void hm_put(hashmap *map, const char *str, const char *value) {
   if (((double)map->size / (double)map->capacity) > 2) hm_rehash(map);
 }
 
-const char *hm_get(hashmap *map, const char *str) {
+void *hm_get(hashmap *map, const char *str) {
   uint64_t s_hash = hash(str);
   for (const struct _lkee *bucket = map->buckets[s_hash % map->capacity]; bucket; bucket = bucket->next) {
     if (bucket->key == s_hash && !strcmp(str, bucket->str)) return bucket->value;
@@ -169,6 +182,19 @@ void hm_free(hashmap *map) {
     while (bucket) {
       s_bucket = bucket;
       bucket = bucket->next;
+      free(s_bucket);
+    }
+  }
+  free(map->buckets);
+  free(map);
+}
+
+void hm_free_val(hashmap *map) {
+  for (int i = 0; i < map->capacity; i++) {
+    struct _lkee *bucket = map->buckets[i], *s_bucket;
+    while (bucket) {
+      s_bucket = bucket;
+      bucket = bucket->next;
       free((void*)s_bucket->str);
       free((void*)s_bucket->value);
       free(s_bucket);
@@ -187,54 +213,42 @@ l_list *ll_make(void) {
   return res;
 }
 
-void ll_append(l_list *list, const char *str) {
+void ll_append(l_list *list, void *value) {
   *(list->last) = NEW(struct _le);
-  (*(list->last))->str = str;
+  (*(list->last))->value = value;
   (*(list->last))->next = 0;
   list->last = &((*(list->last))->next);
   list->size++;
 }
 
-void ll_prepend(l_list *list, const char *str) {
+void ll_prepend(l_list *list, void *value) {
   struct _le *data = NEW(struct _le);
-  data->str = str;
+  data->value = value;
   data->next = list->data;
   list->data = data;
   list->size++;
   if (*list->last == list->data) list->last = &(data->next);
 }
 
-const char *ll_pop(l_list *list) {
+void *ll_pop(l_list *list) {
   if (!list->size) return 0;
   list->size--;
   //WARN: Pointer "struct _le**" to "struct _le*" manipulation
   struct _le *data = (struct _le*) list->last;
-  const char *str = data->str;
+  void *value = data->value;
   *(list->last) = data->next;
   free(data);
-  return str;
+  return value;
 }
 
-const char *ll_shift(l_list *list) {
+void *ll_shift(l_list *list) {
   if (!list->size) return 0;
   list->size--;
   struct _le *data = list->data;
-  const char *str = data->str;
+  void *value = data->value;
   list->data = data->next;
   free(data);
-  return str;
-}
-
-void ll_clear(l_list *list) {
-  struct _le *entry = list->data, *s_entry; 
-  while(entry) {
-    s_entry = entry;
-    entry = entry->next;
-    free(s_entry);
-  }
-  list->data = 0;
-  list->last = &list->data;
-  list->size = 0;
+  return value;
 }
 
 void ll_free(l_list *list) {
@@ -242,7 +256,17 @@ void ll_free(l_list *list) {
   while(entry) {
     s_entry = entry;
     entry = entry->next;
-    free((void*)s_entry->str);
+    free(s_entry);
+  }
+  free(list);
+}
+
+void ll_free_val(l_list *list) {
+  struct _le *entry = list->data, *s_entry; 
+  while(entry) {
+    s_entry = entry;
+    entry = entry->next;
+    free((void*)s_entry->value);
     free(s_entry);
   }
   free(list);
