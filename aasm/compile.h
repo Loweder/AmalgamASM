@@ -2,7 +2,7 @@
 
 typedef struct {
   const char *(*get_file)(const char *name);
-  const char *err;
+  char *err;
 } cmpl_env;
 
 char *preprocess(const char *data, cmpl_env *env);

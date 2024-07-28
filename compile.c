@@ -14,6 +14,8 @@
   dest = emalloc(strlen(src));\
   strcpy(dest, src);
 
+#define ERR(code) { snprintf(env->err, 50, "%d: %s", f_line, code); return 0; }
+
 char *gettoken(char **data, char delim) {
   char *first = strchr(*data, delim);
   if (!first) {
@@ -140,18 +142,20 @@ char *substitute(const char *o_src, const char *what, const char *with) {
 //dl_table	= directive line table (contents of .ifdef .else .macro .irp)
 //hs_table 	= history table (stores history of control directives)
 char *preprocess(const char *orig, cmpl_env *env) {
+  uint32_t f_line = 0;
   hashmap *mac_table = hm_make();
   hashset *sym_table = hs_make();
   l_list *hs_table = ll_make(), *dl_table = ll_make(),
 	 *l_table = ll_make(), *f_table = ll_make(), *of_table = ll_make();
   ll_prepend(f_table, orig);
   ll_prepend(of_table, orig);
-  
+
 skip:
   while (f_table->data) {
     const char *o_data = ll_shift(of_table);
     const char *data = ll_shift(f_table);
     while (*data) {
+      f_line++;
       char *label = 0, *opcode = 0, *operands = 0;
       {
 	char *line = gettoken((char**)&data, '\n');
@@ -176,7 +180,7 @@ skip:
 	if (words && !s_with(words->str, '#')) {
 	  STR_COPY(operands, words->str); words = words->next;
 	}
-	if (words && !s_with(words->str, '#')) {} //FIXME throw error
+	if (words && !s_with(words->str, '#')) ERR("Expecting EOL or comment, got symbol");
 	ll_free(o_words);	
       }
 
@@ -187,55 +191,55 @@ skip:
       if (opcode && s_with(opcode, '.')) {
 	full_skip = hs_table->size == 0;
 	if (!strcmp(opcode, ".macro")) {
-	  if (!label) {} //FIXME error
+	  if (!label) ERR(".macro requires label");
 	  ll_prepend(hs_table, "m");
 	  if (operands) {
 	    ll_prepend(dl_table, operands);
 	    operands = 0;
 	  } else ll_prepend(dl_table, "");
 	  ll_prepend(dl_table, label);
-	  
+
 	} else if (!strcmp(opcode, ".irpc")) {
-	  if (!label) {} //FIXME error
-	  if (!operands) {} //FIXME error
+	  if (!label) ERR(".irpc requires label");
+	  if (!operands) ERR(".irpc requires operands");
 	  ll_prepend(hs_table, "r");
 	  ll_prepend(dl_table, operands);
 	  ll_prepend(dl_table, label);
 	  operands = 0;
 
 	} else if (!strcmp(opcode, ".irp")) {
-	  if (!label) {} //FIXME error
-	  if (operands) {} //FIXME error
+	  if (!label) ERR(".irp requires label");
+	  if (operands) ERR(".irp requires no operands");
 	  ll_prepend(hs_table, "r");
 	  ll_prepend(dl_table, "");
 	  ll_prepend(dl_table, label);
 
 	} else if (!strcmp(opcode, ".ifdef")) {
-	  if (!label) {} //FIXME error
-	  if (operands) {} //FIXME error
+	  if (!label) ERR(".ifdef requires label");
+	  if (operands) ERR(".ifdef requires no operands");
 	  if (hs_contains(sym_table, label)) ll_prepend(hs_table, "i1");  
 	  else ll_prepend(hs_table, "i0");
 	  free(label);
-	  
+
 	} else if (!strcmp(opcode, ".ifndef")) {
-	  if (!label) {} //FIXME error
-	  if (operands) {} //FIXME error
+	  if (!label) ERR(".ifndef requires label");
+	  if (operands) ERR(".ifndef requires no operands");
 	  if (hs_contains(sym_table, label)) ll_prepend(hs_table, "i0");  
 	  else ll_prepend(hs_table, "i1");
 	  free(label);
 
 	} else if (!strcmp(opcode, ".else")) {
-	  if (label) {} //FIXME error
-	  if (operands) {} //FIXME error
-	  if (!hs_table->data || (hs_table->data->str[0] != 'i')) {} //FIXME error
+	  if (label) ERR(".else requires no label");
+	  if (operands) ERR(".else requires no operands");
+	  if (!hs_table->data || (hs_table->data->str[0] != 'i')) ERR(".else requires .ifdef or .ifndef")
 	  else if (!strcmp(hs_table->data->str, "i0")) hs_table->data->str = "i1";
 	  else if (!strcmp(hs_table->data->str, "i1")) hs_table->data->str = "i0";
 	  full_skip = hs_table->size == 1;
 
 	} else if (!strcmp(opcode, ".endm")) {
-	  if (label) {} //FIXME error
-	  if (operands) {} //FIXME error
-	  if (!hs_table->data || (hs_table->data->str[0] != 'm')) {} //FIXME error
+	  if (label) ERR(".endm requires no label");
+	  if (operands) ERR(".endm requires no operands");
+	  if (!hs_table->data || (hs_table->data->str[0] != 'm')) ERR(".endm requires .macro")
 	  else {ll_shift(hs_table);};
 	  if (!hs_table->data) {
 	    const char *o_label = ll_shift(dl_table);
@@ -244,11 +248,11 @@ skip:
 	    dl_table = ll_make();
 	    full_skip = 1;
 	  }
-	   
+
 	} else if (!strcmp(opcode, ".endr")) {
-	  if (label) {} //FIXME error
-	  if (operands) {} //FIXME error
-	  if (!hs_table->data || (hs_table->data->str[0] != 'r')) {} //FIXME error
+	  if (label) ERR(".endr requires no label");
+	  if (operands) ERR(".endr requires no operands");
+	  if (!hs_table->data || (hs_table->data->str[0] != 'r')) ERR(".endr requires .irp or .irpc")
 	  else {ll_shift(hs_table);};
 	  if (!hs_table->data) {
 	    const char *o_label = ll_shift(dl_table);
@@ -268,7 +272,7 @@ skip:
 	      ll_shift(dl_table);
 	      l_list *o_operands = to_llist(o_label, ',');
 	      o_sl_data = from_llist(dl_table, '\n');
-	      if (o_operands->size < 2) {} //FIXME error
+	      if (o_operands->size < 2) ERR(".endr requires 2 or more operands");
 	      struct _le* prev = 0;
 	      struct _le* current = o_operands->data->next;
 	      struct _le* next = 0;
@@ -294,9 +298,9 @@ skip:
 	  }
 
 	} else if (!strcmp(opcode, ".endif")) {
-	  if (label) {} //FIXME error
-	  if (operands) {} //FIXME error
-	  if (!hs_table->data || (hs_table->data->str[0] != 'i')) {} //FIXME error
+	  if (label) ERR(".endif requires no label");
+	  if (operands) ERR(".endif requires no operands");
+	  if (!hs_table->data || (hs_table->data->str[0] != 'i')) ERR(".endif requires .ifdef or .ifndef")
 	  else {ll_shift(hs_table);};
 	  if (!hs_table->data) {
 	    char *sl_data = from_llist(dl_table, '\n');
@@ -311,8 +315,8 @@ skip:
 	} else if (!strcmp(opcode, ".include")) {
 	  if (out_skip)
 	    goto clean;
-	  if (!label) {} //FIXME error
-	  if (operands) {} //FIXME error
+	  if (!label) ERR(".include requires file name");
+	  if (operands) ERR(".include requires no operands");
 	  const char *sl_data = env->get_file(label);
 	  SIDELOAD_O;
 	  SIDELOAD(sl_data);
@@ -334,14 +338,14 @@ skip:
 	sl_data = emalloc(strlen(o_sl_data) + 1);
 	strcpy((char*)sl_data, o_sl_data);
 
-	for (struct _le *entry = o_operands->data, *c_entry = c_operands->data; entry; entry = entry->next) {
-	  l_list *se = to_llist(entry->str, '=');
-	  entry->str = 0;
-	  if (se->size > 2) {} //FIXME error
+	struct _le *c_entry = c_operands->data;
+	while (o_operands->data) {
+	  l_list *se = to_llist(ll_shift(o_operands), '=');
 	  const char *what = se->data->str, *with;
-	  if (c_entry) { with = c_entry->str; c_entry = c_entry->next; }
+	  if (se->size > 2) ERR(".macro operand must be 'a=c' or 'a'")
+	  else if (c_entry) { with = c_entry->str; c_entry = c_entry->next; }
 	  else if (se->size == 2) with = se->data->next->str;
-	  else {} //FIXME error
+	  else ERR("Macro call requires more arguments");
 	  sl_data = substitute(sl_data, what, with);
 	  ll_free(se);
 	}
@@ -369,7 +373,6 @@ clean:
     }
     free((void*)o_data);
   }
-
 
   ll_free(of_table);
   ll_free(f_table);
