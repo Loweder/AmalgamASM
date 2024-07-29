@@ -17,7 +17,7 @@ EXE = libaasm.so
 TEST_SRC = $(wildcard test/*.c)
 TEST_EXE = $(TEST_SRC:test/%.c=test/%.o)
 
-all: clean ${EXE} ${TEST_EXE}
+all: clean ${EXE}
 
 test: ${TEST_EXE}
 	@FAILED=0; \

@@ -8,12 +8,32 @@ on:
 
 jobs:
   build:
-
+    name: Build
     runs-on: ubuntu-latest
 
     steps:
     - uses: actions/checkout@v4
-    - name: make all
-      run: make all
-    - name: make test
+ 
+    - name: Make libaasm.so
+      run: make
+
+    - name: Upload libaasm.so
+      uses: actions/upload-artifact@v4
+      with:
+        name: libaasm
+        path: libaasm.so   
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+
+    needs: [ build ]
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Download libaasm.so
+      uses: actions/download-artifact@v4
+      with:
+        name: libaasm
+
+    - name: Run tests
       run: make test
