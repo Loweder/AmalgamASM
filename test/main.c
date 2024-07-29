@@ -46,6 +46,7 @@ static cmpl_env env = {
 };
 
 int main(void) {
+  return 1;
   env.err = emalloc(100);
   l_list *product = preprocess("main.s", &env);
   if (!product) {
