@@ -489,7 +489,6 @@ dcwa: //Dont care + Who asked
 
 
       if (!full_skip) {
-	_debug_print_line(r_line);
 	if (!out_skip) ll_append(result, r_line);
 	else ll_append(dl_result, r_line);
       } else {

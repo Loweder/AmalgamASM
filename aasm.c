@@ -613,6 +613,26 @@ void execute_simple(hw *s, cpu *core) {
       else GPR(IP) = GPR_16(1);
       core->sleep = 1;
       return;
+    case I_RJMP:
+      GPR(IP) += IMM_16(1);
+      core->sleep = 1;
+      return;
+    case I_RCALL:
+      *MMUS_16(GPR(SP) -= 2) = GPR(IP);
+      GPR(IP) += IMM_16(1);
+      core->sleep = 1;
+      return;
+    case I_RIJMP:
+      ifmem(1) GPR(IP) += *MMUS_16(GPR_16(1));
+      else GPR(IP) += GPR_16(1);
+      core->sleep = 1;
+      return;
+    case I_RICALL:
+      *MMUS_16(GPR(SP) -= 2) = GPR(IP);
+      ifmem(1) GPR(IP) += *MMUS_16(GPR_16(1));
+      else GPR(IP) += GPR_16(1);
+      core->sleep = 1;
+      return;
     case I_JC:
       {
 	uint8_t op1 = insn[1] & 0x80 ? 1 : BIT_G(MSR(ALU), (insn[1] >> 4) & 0x7);

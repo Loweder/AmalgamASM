@@ -1,6 +1,6 @@
-#include "aasm/aasm.h"
-#include "aasm/compile.h"
-#include "aasm/util.h"
+#include <aasm/aasm.h>
+#include <aasm/compile.h>
+#include <aasm/util.h>
 #include <stdlib.h>
 #include <stdio.h>
 

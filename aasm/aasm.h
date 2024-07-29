@@ -21,6 +21,7 @@ typedef enum {
   I_SHL, I_SHR, I_ROL, I_ROR,
  
   I_INT = 0x60, I_JMP, I_CALL, I_IJMP, I_ICALL, 
+  I_RJMP, I_RCALL, I_RIJMP, I_RICALL, 
   I_JC, I_JNC, I_MOVC, I_MOVNC, I_RET,
   
   IP_FLAGS = 0xA0,

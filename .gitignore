@@ -1,7 +1,8 @@
-test/*
+test/*.log
+test/*.o
 .cache/
 *.o
-*.out
+*.so
 *.swp
 Session.vim
 compile_commands.json
