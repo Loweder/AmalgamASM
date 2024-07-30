@@ -4,6 +4,23 @@
 #include <stdlib.h>
 #include <stdio.h>
 
+static void _debug_print_line(l_list *line) {
+  char *file_name = line->data->value;
+  size_t line_number = (size_t) line->data->next->value;
+
+  printf("%s:%ld ", file_name, line_number);
+
+  for(struct _le *entry = line->data->next->next; entry; entry = entry->next) {
+    printf("%s ", (char*) entry->value);
+  }
+  printf("\n");
+}
+static void _debug_print_lines(l_list *lines) { //NOLINT
+  for (struct _le *line = lines->data; line; line = line->next) {
+    _debug_print_line(line->value);
+  }
+}
+
 const char *get_file(const char *name);
 uint8_t *rom_mem(void);
 uint8_t *hw_mem(void);
@@ -11,7 +28,6 @@ uint8_t *hw_mem(void);
 static const md_desc cpus[2] = {
   {100}, {100}
 }; 
-
 static const md_desc roms[1] = {
   {
     .freq = 100,
@@ -20,7 +36,6 @@ static const md_desc roms[1] = {
     .processor = 0
   }
 };
-
 static const md_desc rams[1] = {
   {
     .freq = 100,
@@ -29,7 +44,6 @@ static const md_desc rams[1] = {
     .processor = 0
   }
 };
-
 static const hw_desc device = {
   .md_count = {[MDD_PORT_ROM] = 1, [MDD_PORT_RAM] = 1, [MDD_PORT_CPU] = 2},
   .md = {[MDD_PORT_ROM] = (md_desc*) roms, [MDD_PORT_RAM] = (md_desc*) rams, [MDD_PORT_CPU] = (md_desc*) cpus},
@@ -50,23 +64,25 @@ int main(void) {
   l_list *product = preprocess("main.s", &env);
   if (!product) {
     printf("Preprocess error in %s\n", env.err);
-    return -1;
+    return 1;
   }
-  while (product->data) {
-    l_list *line = ll_shift(product);
-    char *file_name = ll_shift(line);
-    size_t line_number = (size_t) ll_shift(line);
-
-    printf("%s:%ld ", file_name, line_number);
-    free(file_name);
-
-    while(line->data) {
-      char *word = ll_shift(line);
-      printf("%s ", word);
-      free(word);
+  _debug_print_lines(product);
+  l_list *complex = compile(product, &env);
+  if (!complex) {
+    printf("Compiler error in %s\n", env.err);
+    return 1;
+  }
+  l_list *sections = complex->data->next->value;
+  for (struct _le *entry = sections->data; entry; entry = entry->next) {
+    printf("Section %s\n", (char*)((l_list*)entry->value)->data->value);
+    l_list *section = ((l_list*)entry->value)->data->next->value;
+    size_t sect_size = (size_t) ll_shift(section);
+    ll_shift(section);
+    uint8_t *data = ll_shift(section);
+    for (size_t i = 0; i < sect_size; i++) {
+      printf("%02x ", data[i]);
+      if (!((i+1) % 32)) printf("\n");
     }
-    printf("\n");
-    ll_free(line);
   }
 }
 
@@ -94,17 +110,8 @@ ALU: %8X | MODE: %8X | MTASK: %8X | INT: %8X | PAGING: %8X | PAGE-F: %8X\n", i,
 }
 
 uint8_t *rom_mem(void) {
-  static uint8_t data[0x1000] = {
-    0xAC, 0x36, 0x18, 0xCA,
-    [0x100] = I_MOVI, 0x00, 0x00, 0x10,
-    I_MOVI, 0x01, 0xFE, 0xCA,
-    I_MOVI, 0x02, 0x00, 0x20,
-    I_MOVI, 0x22, 0x40, 0x30,
-    I_MOV, 0x13, 0x02,
-    I_PUSH, 0x01,
-    I_POP, 0x04,
-    I_SWAP, 0x02, 0x04,
-    I_MOV, 0x55, 0x00
+  static uint8_t data[1] = {
+    0x00
   };
   return data;
 }

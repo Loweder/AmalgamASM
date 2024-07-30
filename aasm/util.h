@@ -62,12 +62,13 @@ void hs_free_val(hashset *set);
 hashmap *hm_make(void);
 uint8_t hm_contains(const hashmap *map, const char *str);
 //WARNING: calls free() on the key and value during hm_free(), but not during hm_clear()
-void hm_put(hashmap *map, const char *str, void *val);
-void *hm_get(hashmap *map, const char *str);
-void hm_erase(hashmap *map, const char *str);
+void *hm_put(hashmap *map, const char *str, void *val);
+struct _lkee *hm_get(hashmap *map, const char *str);
+struct _lkee *hm_erase(hashmap *map, const char *str);
 void hm_rehash(hashmap *map);
 void hm_free(hashmap *map);
 void hm_free_val(hashmap *map);
+l_list *hm_free_to(hashmap *map);
 
 l_list *ll_make(void);
 //WARNING: calls free() on the value during ll_free(), but not during ll_clear()

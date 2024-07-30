@@ -23,7 +23,7 @@ test: ${TEST_EXE}
 	@FAILED=0; \
 	for exe in $(TEST_EXE); do \
 		echo "Running $$exe"; \
-		./$$exe > $$exe.log; \
+		script -e -c ./$$exe $$exe.log; \
 		CODE=$$?; \
 		[ $$CODE -ne 0 ] && { echo "Failed with $$CODE"; FAILED=1; } || echo "Passed"; \
 	done; \

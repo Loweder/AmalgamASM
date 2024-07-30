@@ -249,7 +249,578 @@ static l_list *_pp_format(const char *o_data, const char *name) {
   ll_free(data);
   return result;
 }
+const char *_pp_macro_sub(l_list *line, l_list *o_sl_data, l_list *files) { //0-skip, err
+  l_list *sl_data = ll_make();
+  l_list *o_operands = ll_shift(o_sl_data), *operands = ll_make();
 
+  for (struct _le *entry = o_sl_data->data; entry; entry = entry->next) {
+    l_list *entry_str = _copy_line(entry->value);
+    ll_append(sl_data, entry_str);
+  }
+  for (struct _le *entry = o_operands->data; entry; entry = entry->next) {
+    char *entry_str = emalloc(strlen(entry->value) + 1);
+    strcpy(entry_str, entry->value);
+    ll_append(operands, entry_str);
+  }
+  ll_prepend(o_sl_data, o_operands);
+
+  struct _le *c_entry = line->data;
+  while (operands->data) {
+    l_list *se = _ll_from(ll_shift(operands), '=');
+    const char *what = se->data->value, *with;
+    if (se->size > 2) return ".macro operand must be 'a=c' or 'a'";
+    else if (c_entry) { with = c_entry->value; c_entry = c_entry->next; }
+    else if (se->size == 2) with = se->data->next->value;
+    else return "Macro call requires more arguments";
+    l_list *t_sl_data = _ll_sub(sl_data, what, with);
+    ll_free_val(sl_data);
+    sl_data = t_sl_data;
+    ll_free_val(se);
+  }
+  SIDELOAD(sl_data);
+  ll_free_val(operands);
+
+  //TODO currently label on macros is ignored, maybe put it to a new line
+  return 0;
+}
+const char *_pp_parse_set(l_list *line, l_list *result, l_list *history, hashset *symbols) { //01-fskip, err
+  if (line->size != 2) return ".set/.equ/.equiv require 2 operands";
+  if (!history->data) {
+    if (!hs_contains(symbols, line->data->value))
+      hs_put(symbols, line->data->value);
+  }
+  return (char*) (size_t) (history->data && !strcmp(history->data->value, "i0"));
+}
+const char *_pp_parse_err(l_list *line, l_list *result, l_list *history) { //0, err
+  if (line->size < 1) return ".err requires label";
+  if (!history->data)
+    return ll_shift(line);
+  return 0;
+}
+const char *_pp_parse_include(l_list *line, l_list *result, l_list *history, cmpl_env *env, l_list *files) { //0, 1-skip, err
+  if (line->size != 1) return ".include requires 1 operand";
+  if (history->data) return 0;
+  l_list *sl_data = _pp_format(env->get_file(line->data->value), line->data->value);
+  SIDELOAD(sl_data);
+  return (void*) 1;
+}
+const char *_pp_parse_macro(l_list *line, l_list *result, l_list *history) { //0, err
+  if (line->size < 1) return ".macro requires label";
+  if (history->data) return 0;
+  ll_append(result, ll_shift(line));
+  l_list *operands = ll_make();
+  while (line->data) ll_append(operands, ll_shift(line));
+  ll_append(result, operands);
+  return 0;
+}
+const char *_pp_parse_endm(l_list *line, l_list **result, l_list *history, hashmap *macros) { //0, err
+  if (line->size != 0) return ".endm requires no operands";
+  if (!history->data) return ".endm requires .macro";
+  ll_shift(history);
+  if (history->data) return 0;
+  const char *o_label = ll_shift(*result);
+  hm_put(macros, o_label, *result);
+  *result = ll_make();
+  return 0;
+}
+const char *_pp_parse_irp(l_list *line, l_list *result, l_list *history) { //0, err
+  if (line->size < 1) return ".irp requires label";
+  if (history->data) return 0;
+  ll_append(result, ll_shift(line));
+  l_list *operands = ll_make();
+  while (line->data) ll_prepend(operands, ll_shift(line));
+  ll_append(result, operands);
+  return 0;
+}
+const char *_pp_parse_irpc(l_list *line, l_list *result, l_list *history) { //0, err
+  if (line->size != 2) return ".irpc requires 2 operands";
+  if (history->data) return 0;
+  ll_append(result, ll_shift(line));
+  ll_append(result, ll_shift(line));
+  return 0;
+}
+const char *_pp_parse_endr(l_list *line, l_list **result, l_list *history, l_list *files) { //0, 1-skip, err
+  if (line->size != 0) return ".endr requires no operands";
+  if (!history->data) return ".endr requires .irp or .irpc";
+  const char *type = ll_shift(history);
+  if (history->data) return 0;
+  const char *o_label = ll_shift(*result);
+  l_list *sl_data;
+  if (!strcmp(type, "rc")) {
+    const char *o_operands = ll_shift(*result);
+    for (int i = strlen(o_operands) - 1; i >= 0; i--) {
+      uint16_t ch = o_operands[i];
+      sl_data = _ll_sub(*result, o_label, (char*) &ch);
+      SIDELOAD(sl_data);
+    }
+    free((void*)o_operands);
+  } else {
+    l_list *o_operands = ll_shift(*result);
+    for (struct _le *operand = o_operands->data; operand; operand = operand->next) {
+      sl_data = _ll_sub(*result, o_label, operand->value);
+      SIDELOAD(sl_data);
+    }
+    ll_free_val(o_operands);
+  }
+  ll_free_val(*result);
+  free((void*)o_label);
+  *result = ll_make();
+  return (void*) 1;
+}
+const char *_pp_parse_ifdef(l_list *line, l_list *result, l_list *history, hashset *symbols) { //0, err
+  if (line->size != 1) return ".ifdef requires 1 operand";
+  if (!history->data) {
+    if (hs_contains(symbols, line->data->value)) ll_prepend(history, "i1");  
+    else ll_prepend(history, "i0");
+  } else {
+    if (!strcmp(history->data->value, "i0")) ll_prepend(history, "i0");
+    else if (!strcmp(history->data->value, "i1")) ll_prepend(history, "i1");
+  }
+  return 0;
+}
+const char *_pp_parse_ifndef(l_list *line, l_list *result, l_list *history, hashset *symbols) { //0, err
+  if (line->size != 1) return ".ifndef requires 1 operand";
+  if (!history->data) {
+    if (hs_contains(symbols, line->data->value)) ll_prepend(history, "i0");  
+    else ll_prepend(history, "i1");
+  } else {
+    if (!strcmp(history->data->value, "i0")) ll_prepend(history, "i0");
+    else if (!strcmp(history->data->value, "i1")) ll_prepend(history, "i1");
+  }
+  return 0;
+}
+const char *_pp_parse_else(l_list *line, l_list *result, l_list *history) { //01-fskip, err
+  if (line->size != 0) return ".else requires no operands";
+  if (!history->data) return ".else requires .ifdef or .ifndef";
+  if (history->size > 1) return 0;
+  if (!strcmp(history->data->value, "i0")) history->data->value = "i1";
+  else if (!strcmp(history->data->value, "i1")) history->data->value = "i0";
+  return (void*) 1;
+}
+const char *_pp_parse_endif(l_list *line, l_list **result, l_list *history, l_list *files) { //0, 1-skip, err
+  if (line->size != 0) return ".endif requires no operands";
+  if (!history->data) return ".endif requires .ifdef or .ifndef";
+  ll_shift(history);
+  if (history->data) return 0;
+  SIDELOAD(*result);
+  *result = ll_make();
+  return (void*) 1;
+}
+
+void _cl_parse_int(l_list *line, l_list *section, size_t size) {
+  if (line->size > 0) {
+    int8_t *o_mem = emalloc(line->size*size);
+    l_list *mem = ll_make();
+    ADDR_ADD(line->size*size);
+    ll_append(section, mem);
+    ll_append(mem, (void*) (line->size*size));
+    ll_append(mem, o_mem);
+    while (line->data) {
+      char *operand = ll_shift(line);
+      long long int i_operand = strtoll(operand, 0, 0);
+      memcpy(o_mem, &i_operand, size);
+      o_mem += size;
+      free(operand);
+    }
+  }
+}
+void _cl_parse_float(l_list *line, l_list *section) {
+  if (line->size > 0) {
+    float *o_mem = emalloc(line->size*4);
+    l_list *mem = ll_make();
+    ADDR_ADD(line->size*4);
+    ll_append(section, mem);
+    ll_append(mem, (void*) (line->size*4));
+    ll_append(mem, o_mem);
+    while (line->data) {
+      char *operand = ll_shift(line);
+      float i_operand = strtod(operand, 0);
+      *o_mem++ = i_operand;
+      free(operand);
+    }
+  }
+}
+void _cl_parse_double(l_list *line, l_list *section) {
+  if (line->size > 0) {
+    double *o_mem = emalloc(line->size*8);
+    l_list *mem = ll_make();
+    ADDR_ADD(line->size*8);
+    ll_append(section, mem);
+    ll_append(mem, (void*) (line->size*8));
+    ll_append(mem, o_mem);
+    while (line->data) {
+      char *operand = ll_shift(line);
+      double i_operand = strtod(operand, 0);
+      *o_mem++ = i_operand;
+      free(operand);
+    }
+  }
+}
+void _cl_parse_ascii(l_list *line, l_list *section) {
+  if (line->size > 0) {
+    size_t calc_size = 0;
+    for (struct _le *entry = line->data; entry; entry = entry->next)
+      calc_size += strlen(entry->value);
+    char *o_mem = emalloc(calc_size);
+    l_list *mem = ll_make();
+    ADDR_ADD(calc_size);
+    ll_append(section, mem);
+    ll_append(mem, (void*) calc_size);
+    ll_append(mem, o_mem);
+    while (line->data) {
+      char *operand = ll_shift(line);
+      size_t loc_size = strlen(operand);
+      memcpy(o_mem, operand, loc_size);
+      o_mem += loc_size;
+      free(operand);
+    }
+  }
+}
+void _cl_parse_asciz(l_list *line, l_list *section) {
+  if (line->size > 0) {
+    size_t calc_size = 0;
+    for (struct _le *entry = line->data; entry; entry = entry->next)
+      calc_size += strlen(entry->value) + 1;
+    char *o_mem = emalloc(calc_size);
+    l_list *mem = ll_make();
+    ADDR_ADD(calc_size);
+    ll_append(section, mem);
+    ll_append(mem, (void*) calc_size);
+    ll_append(mem, o_mem);
+    while (line->data) {
+      char *operand = ll_shift(line);
+      size_t loc_size = strlen(operand) + 1;
+      memcpy(o_mem, operand, loc_size);
+      o_mem += loc_size;
+      free(operand);
+    }
+  }
+}
+const char *_cl_parse_skip(l_list *line, l_list *section) {
+  if (line->size > 2 || line->size < 1) return ".space/.skip requires 2 or 1 operands";
+  char *o_size = ll_shift(line);
+  size_t size = strtol(o_size, 0, 0), val = 0;
+  free(o_size);
+  if (line->data) {
+    char *o_val = ll_shift(line);
+    val = strtol(o_val, 0, 0);
+    free(o_val);
+  }
+  if (!size) return ".space/.skip requires a valid size";
+  int8_t *o_mem = emalloc(size);
+  l_list *mem = ll_make();
+  ADDR_ADD(size);
+  ll_append(section, mem);
+  ll_append(mem, (void*) size);
+  ll_append(mem, o_mem);
+  memset(o_mem, (int8_t)val, size);
+  return 0;
+}
+const char *_cl_parse_fill(l_list *line, l_list *section) {
+  if (line->size > 3 || line->size < 1) return ".fill requires between 3 and 1 operands";
+  char *o_repeat = ll_shift(line);
+  size_t repeat = strtol(o_repeat, 0, 0), size = 1, val = 0;
+  free(o_repeat);
+  if (line->data) {
+    char *o_size = ll_shift(line);
+    size = strtol(o_size, 0, 0);
+    free(o_size);
+    if(!size) size = 1;
+    else if (size > 8) return ".fill requires a size less or equal than 8";
+  }
+  if (line->data) {
+    char *o_val = ll_shift(line);
+    val = strtol(o_val, 0, 0);
+    free(o_val);
+  }
+  if (!repeat) return ".fill requires a valid repeat";
+  int8_t *o_mem = emalloc(size*repeat);
+  l_list *mem = ll_make();
+  ADDR_ADD(size*repeat);
+  ll_append(section, mem);
+  ll_append(mem, (void*) (size*repeat));
+  ll_append(mem, o_mem);
+  for (size_t i = 0; i < size*repeat; i += size) {
+    memcpy(o_mem+i, &val, size);
+  }
+  return 0;
+}
+const char *_cl_parse_align(l_list *line, l_list *section) {
+  //TODO .balign and .p2align
+  if (line->size > 3 || line->size < 1) return ".align requires between 3 and 1 operands";
+  char *o_align = ll_shift(line);
+  size_t align = strtol(o_align, 0, 0), val = 0, max = 0;
+  free(o_align);
+  if (line->data) {
+    char *o_val = ll_shift(line);
+    val = strtol(o_val, 0, 0);
+    free(o_val);
+  }
+  if (line->data) {
+    char *o_max = ll_shift(line);
+    max = strtol(o_max, 0, 0);
+    free(o_max);
+  }
+  if (!align) return ".align requires a valid alignment";
+  size_t *addr_ptr = (size_t*)&(section->data->value);
+  size_t needed = (align - (*addr_ptr % align)) % align;
+  if (needed && (!max || needed < max)) {
+    int8_t *o_mem = emalloc(needed);
+    l_list *mem = ll_make();
+    *addr_ptr += needed;
+    ll_append(section, mem);
+    ll_append(mem, (void*) needed);
+    ll_append(mem, o_mem);
+    memset(o_mem, (int8_t)val, needed);
+  }
+  return 0;
+}
+const char *_cl_parse_org(l_list *line, l_list *section) {
+  if (line->size > 2 || line->size < 1) return ".org requires 2 or 1 operands";
+  char *o_until = ll_shift(line);
+  size_t until = strtol(o_until, 0, 0), val = 0;
+  free(o_until);
+  if (line->data) {
+    char *o_val = ll_shift(line);
+    val = strtol(o_val, 0, 0);
+    free(o_val);
+  }
+  if (!until) return ".org requires a valid address";
+  size_t *addr_ptr = (size_t*)&(section->data->value);
+  if (until > *addr_ptr) {
+    size_t needed = until - *addr_ptr;
+    int8_t *o_mem = emalloc(needed);
+    l_list *mem = ll_make();
+    *addr_ptr += needed;
+    ll_append(section, mem);
+    ll_append(mem, (void*) needed);
+    ll_append(mem, o_mem);
+    memset(o_mem, (int8_t)val, needed);
+  }
+  return 0;
+}
+const char *_cl_parse_equ(l_list *line, l_list *section, hashmap *equs) {
+  if (line->size != 2) return ".set/.equ requires 2 operands";
+  char *name = ll_shift(line);
+  char *value = ll_shift(line);
+  long long int true_value = strtoll(value, 0, 0);
+  l_list *r_value = ll_make();
+  ll_append(r_value, (void*) true_value);
+  ll_append(r_value, ".rodata");
+  l_list *old = hm_put(equs, name, r_value);
+  if (old) {
+    ll_free(old);
+    free(name);
+  }
+  free(value);
+  return 0;
+}
+const char *_cl_parse_equiv(l_list *line, l_list *section, hashmap *equs) {
+  if (line->size != 2) return ".equiv requires 2 operands";
+  char *name = ll_shift(line);
+  char *value = ll_shift(line);
+  long long int true_value = strtoll(value, 0, 0);
+  if (hm_contains(equs, name))
+    return ".equiv failed, already exists";
+  l_list *r_value = ll_make();
+  ll_append(r_value, (void*) true_value);
+  ll_append(r_value, ".rodata");
+  hm_put(equs, name, r_value);
+  free(value);
+  return 0;
+}
+void _cl_parse_section(hashmap *sections, char *name, l_list **section, char **s_name) {
+  if (hm_contains(sections, name)) {
+    *s_name = (char*) hm_get(sections, name)->str;
+    *section = hm_get(sections, name)->value;
+  } else {
+    *s_name = emalloc(strlen(name) + 1);
+    strcpy(*s_name, name);
+    size_t old_32 = (size_t) (*section)->data->next->value;
+    *section = ll_make();
+    hm_put(sections, *s_name, *section);
+    ll_append(*section, 0);
+    ll_append(*section, (void*)old_32);
+    ll_append(*section, ll_make());
+  }
+}
+
+uint8_t parse_register(char *word) {
+  uint8_t product = 0;
+  if (_s_with(word, '[') && _e_with(word, ']')) {
+    product |= 0x20; //Is pointer
+    word[strlen(word) - 1] = 0;
+    word++;
+  }
+  if (!_s_with(word, '%')) return 0xFF; //Not valid
+  else word++;
+
+  if (_s_with(word, 'e')) {
+    product |= 0x40; //Extended
+    word++;
+  }
+
+  if (!strcmp(word, "r1")) product |= 0;
+  else if (!strcmp(word, "r2")) product |= 1;
+  else if (!strcmp(word, "r3")) product |= 2;
+  else if (!strcmp(word, "r4")) product |= 3;
+  else if (!strcmp(word, "r5")) product |= 4;
+  else if (!strcmp(word, "r6")) product |= 5;
+  else if (!strcmp(word, "r7")) product |= 6;
+  else if (!strcmp(word, "r8")) product |= 7;
+  else if (!strcmp(word, "r9")) product |= 8;
+  else if (!strcmp(word, "r10")) product |= 9;
+  else if (!strcmp(word, "r11")) product |= 10;
+  else if (!strcmp(word, "r12")) product |= 11;
+  else if (!strcmp(word, "r13")) product |= 12;
+  else if (!strcmp(word, "bp")) product |= 13;
+  else if (!strcmp(word, "sp")) product |= 14;
+  else if (!strcmp(word, "ip")) product |= 15;
+  else return 0xFF;
+
+  return product;
+}
+uint16_t parse_immediate(char *word) {
+  return strtol(word, 0, 0);
+}
+
+const char *_cl_parsei_2reg(l_list *line, l_list *section, int opcode) {
+  if (line->size != 2) return "Needs 2 operands"; //TODO descriptive error 
+  char *r1_raw = ll_shift(line), *r2_raw = ll_shift(line);
+  uint8_t r1 = parse_register(r1_raw), r2 = parse_register(r2_raw);
+  if (r1 == 0xFF || r2 == 0xFF) return "Operands not valid";
+  if (r1 & 0x20 && r2 & 0x20) return "Both operands cannot be pointers";
+  if ((r1 & 0x40) ^ (r2 & 0x40)) return "Operands sizes must match";
+  uint8_t *o_mem = emalloc(3);
+  l_list *mem = ll_make();
+  ADDR_ADD(3);
+  ll_append(section, mem);
+  ll_append(mem, (void*) 3);
+  ll_append(mem, o_mem);
+  o_mem[0] = opcode; o_mem[1] = r1 | ((r2 & 0x20) >> 1); o_mem[2] = r2;
+  free(r1_raw);
+  free(r2_raw);
+  return 0;
+}
+const char *_cl_parsei_1reg(l_list *line, l_list *section, int opcode) {
+  if (line->size != 1) return "Needs 1 operand"; //TODO descriptive error 
+  char *r1_raw = ll_shift(line);
+  uint8_t r1 = parse_register(r1_raw);
+  if (r1 == 0xFF) return "Operand not valid";
+  uint8_t *o_mem = emalloc(2);
+  l_list *mem = ll_make();
+  ADDR_ADD(2);
+  ll_append(section, mem);
+  ll_append(mem, (void*) 2);
+  ll_append(mem, o_mem);
+  o_mem[0] = opcode; o_mem[1] = r1;
+  free(r1_raw);
+  return 0;
+}
+const char *_cl_parsei_1imm(l_list *line, l_list *section, int opcode) {
+  if (line->size != 1) return "Needs 1 operand"; //TODO descriptive error 
+  char *r1_raw = ll_shift(line);
+  uint16_t r1 = parse_immediate(r1_raw);
+  uint8_t *o_mem = emalloc(3);
+  l_list *mem = ll_make();
+  ADDR_ADD(3);
+  ll_append(section, mem);
+  ll_append(mem, (void*) 3);
+  ll_append(mem, o_mem);
+  o_mem[0] = opcode; *((uint16_t*)o_mem + 1) = r1;
+  free(r1_raw);
+  return 0;
+}
+const char *_cl_parsei_2reg_imm(l_list *line, l_list *section, int opcode, int alt_opcode) {
+  if (line->size != 2) return "Needs 2 operands"; //TODO descriptive error 
+  char *r1_raw = ll_shift(line), *r2_raw = ll_shift(line);
+  uint16_t r1 = parse_register(r1_raw), r2 = parse_register(r2_raw);
+  if (r1 == 0xFF) return "Operand not valid";
+  if (r2 == 0xFF) {
+    if (r1 & 0x40) return "Cannot use Extended on 1reg-1imm";
+    r2 = parse_immediate(r2_raw);
+    uint8_t *o_mem = emalloc(4);
+    l_list *mem = ll_make();
+    ADDR_ADD(4);
+    ll_append(section, mem);
+    ll_append(mem, (void*) 4);
+    ll_append(mem, o_mem);
+    o_mem[0] = alt_opcode; o_mem[1] = r1; ((uint16_t*)o_mem)[1] = r2;
+  } else {
+    if (r1 & 0x20 && r2 & 0x20) return "Both operands cannot be pointers";
+    if ((r1 & 0x40) ^ (r2 & 0x40)) return "Operands sizes must match";
+    uint8_t *o_mem = emalloc(3);
+    l_list *mem = ll_make();
+    ADDR_ADD(3);
+    ll_append(section, mem);
+    ll_append(mem, (void*) 3);
+    ll_append(mem, o_mem);
+    o_mem[0] = opcode; o_mem[1] = r1 | ((r2 & 0x20) >> 1); o_mem[2] = r2;
+  }
+  free(r1_raw);
+  free(r2_raw);
+  return 0;
+}
+const char *_cl_parsei_1reg_imm(l_list *line, l_list *section, int opcode, int alt_opcode) {
+  if (line->size != 1) return "Needs 1 operand"; //TODO descriptive error 
+  char *r1_raw = ll_shift(line);
+  uint16_t r1 = parse_register(r1_raw);
+  if (r1 == 0xFF) {
+    r1 = parse_immediate(r1_raw);
+    uint8_t *o_mem = emalloc(3);
+    l_list *mem = ll_make();
+    ADDR_ADD(3);
+    ll_append(section, mem);
+    ll_append(mem, (void*) 3);
+    ll_append(mem, o_mem);
+    o_mem[0] = alt_opcode; *((uint16_t*)o_mem + 1) = r1;
+  } else {
+    uint8_t *o_mem = emalloc(2);
+    l_list *mem = ll_make();
+    ADDR_ADD(2);
+    ll_append(section, mem);
+    ll_append(mem, (void*) 2);
+    ll_append(mem, o_mem);
+    o_mem[0] = opcode; o_mem[1] = r1;
+  }
+  free(r1_raw);
+  return 0;
+}
+const char *_cl_parsei_1reg_1imm(l_list *line, l_list *section, int opcode) {
+  if (line->size != 2) return "Needs 2 operands"; //TODO descriptive error 
+  char *r1_raw = ll_shift(line), *r2_raw = ll_shift(line);
+  uint16_t r1 = parse_register(r1_raw), r2 = parse_immediate(r2_raw);
+  if (r1 == 0xFF) return "Operand not valid";
+  uint8_t *o_mem = emalloc(3);
+  l_list *mem = ll_make();
+  ADDR_ADD(3);
+  ll_append(section, mem);
+  ll_append(mem, (void*) 3);
+  ll_append(mem, o_mem);
+  o_mem[0] = opcode; o_mem[1] = r1; o_mem[2] = r2;
+  free(r1_raw);
+  free(r2_raw);
+  return 0;
+}
+const char *_cl_parsei_jcc(l_list *line, l_list *section) {
+
+}
+const char *_cl_parsei_movcc(l_list *line, l_list *section) {
+
+}
+const char *_cl_parsei_pure(l_list *line, l_list *section, int opcode) {
+  if (line->size != 0) return "Needs no operands"; //TODO descriptive error 
+  uint8_t *o_mem = emalloc(1);
+  l_list *mem = ll_make();
+  ADDR_ADD(1);
+  ll_append(section, mem);
+  ll_append(mem, (void*) 1);
+  ll_append(mem, o_mem);
+  o_mem[0] = opcode;
+  return 0;
+}
+
+//TODO not related but important: fix hashmap erasing/adding/listing
 //.macro .irp .irpc .ifdef .include .err PPT
 //.byte .short .int .long .single/.float .double .ascii .asciz CT
 //.space/.skip .fill .align .org .code16 .code32 CT
@@ -280,14 +851,12 @@ l_list *preprocess(const char *orig, cmpl_env *env) {
   ll_append(files, _pp_format(env->get_file(orig), orig));
 skip:
   while(files->data) {
-    l_list *file = ll_shift(files); 	// file[*f_line...]
+    l_list *file = files->data->value; 	// file[*f_line...]
     while (file->data) {
-      l_list *line = ll_shift(file), 	//*f_line
-	     *r_line = ll_make(); 	//*f_line
+      l_list *line = ll_shift(file), *r_line = ll_make();
       char *f_name = ll_shift(line);
       size_t f_line = (size_t) ll_shift(line);
-      
-      uint8_t full_skip = history->data && !strcmp(history->data->value, "i0"), out_skip = history->data != 0;
+      uint8_t full_skip = history->data && !strcmp(history->data->value, "i0"), out_skip = history->size != 0;
       ll_append(r_line, f_name);
       ll_append(r_line, (void*)f_line);
 
@@ -303,147 +872,20 @@ skip:
 	ll_append(r_line, opcode);
 	if (_s_with(opcode, '.')) {
 	  full_skip = history->size == 0 || !strcmp(history->data->value, "i0");
-	  if (!strcmp(opcode, ".set") || 
-	      !strcmp(opcode, ".equ") ||
-	      !strcmp(opcode, ".equiv")) {
-	    if (line->size != 2) ERR(".set/.equ requires 2 operands");
-	    if (!history->data) {
-	      if (!hs_contains(symbols, line->data->value))
-		hs_put(symbols, line->data->value);
-	    }
-	    full_skip = history->data && !strcmp(history->data->value, "i0");
-	  } else if (!strcmp(opcode, ".err")) {
-	    if (line->size < 1) ERR(".err requires label");
-	    if (!history->data) {
-	      ERR((char*) ll_shift(line));
-	    }
-	  } else if (!strcmp(opcode, ".macro")) {
-	    if (line->size < 1) ERR(".macro requires label");
-	    if (history->data && ((char*)history->data->value)[0] != 'm') goto dcwa;
-	    if (!history->data) {
-	      ll_append(dl_result, ll_shift(line));
-	      l_list *operands = ll_make();
-	      while (line->data) ll_append(operands, ll_shift(line));
-	      ll_append(dl_result, operands);
-	    }
-	    ll_prepend(history, "m");
-	  } else if (!strcmp(opcode, ".irp")) {
-	    if (line->size < 1) ERR(".irp requires label");
-	    if (history->data && ((char*)history->data->value)[0] != 'r') goto dcwa;
-	    if (!history->data) {
-	      ll_append(dl_result, ll_shift(line));
-	      l_list *operands = ll_make();
-	      while (line->data) ll_prepend(operands, ll_shift(line));
-	      ll_append(dl_result, operands);
-	    }
-	    ll_prepend(history, "rn");
-	  } else if (!strcmp(opcode, ".irpc")) {
-	    if (line->size != 2) ERR(".irpc requires 2 operands");
-	    if (history->data && ((char*)history->data->value)[0] != 'r') goto dcwa;
-	    if (!history->data) {
-	      ll_append(dl_result, ll_shift(line));
-	      ll_append(dl_result, ll_shift(line));
-	    }
-	    ll_prepend(history, "rc");
-	  } else if (!strcmp(opcode, ".ifdef")) {
-	    if (line->size != 1) ERR(".ifdef requires 1 operand");
-	    if (history->data && ((char*)history->data->value)[0] != 'i') goto dcwa;
-	    if (!history->data) {
-	      if (hs_contains(symbols, line->data->value)) ll_prepend(history, "i1");  
-	      else ll_prepend(history, "i0");
-	    } else {
-	      if (!strcmp(history->data->value, "i0")) ll_prepend(history, "i0");
-	      else if (!strcmp(history->data->value, "i1")) ll_prepend(history, "i1");
-	    }
-	  } else if (!strcmp(opcode, ".ifndef")) {
-	    if (line->size != 1) ERR(".ifndef requires 1 operand");
-	    if (history->data && ((char*)history->data->value)[0] != 'i') goto dcwa;
-	    if (!history->data) {
-	      if (hs_contains(symbols, line->data->value)) ll_prepend(history, "i0");  
-	      else ll_prepend(history, "i1");
-	    } else {
-	      if (!strcmp(history->data->value, "i0")) ll_prepend(history, "i0");
-	      else if (!strcmp(history->data->value, "i1")) ll_prepend(history, "i1");
-	    }
-	  } else if (!strcmp(opcode, ".else")) {
-	    if (line->size != 0) ERR(".else requires no operands");
-	    if (!history->data) ERR(".else requires .ifdef or .ifndef")
-	    if (((char*)history->data->value)[0] != 'i') goto dcwa;
-	    if (history->size == 1) {
-	      if (!strcmp(history->data->value, "i0")) history->data->value = "i1";
-	      else if (!strcmp(history->data->value, "i1")) history->data->value = "i0";
-	    }
-	    full_skip = history->size == 1;
-	  } else if (!strcmp(opcode, ".endif")) {
-	    if (line->size != 0) ERR(".endif requires no operands");
-	    if (!history->data) ERR(".endif requires .ifdef or .ifndef")
-	    if (((char*)history->data->value)[0] != 'i') goto dcwa;
-	    ll_shift(history);
-	    if (!history->data) {
-	      SIDELOAD_O;
-	      SIDELOAD(dl_result);
-	      dl_result = ll_make();
-	      
-	      free(ll_shift(r_line));
-	      ll_shift(r_line);
-	      OLABEL_CLEAN;
-	      ll_free_val(r_line);
-	      ll_free_val(line);
-	      goto skip;
-	    }
-	  } else if (!strcmp(opcode, ".endr")) {
-	    if (line->size != 0) ERR(".endr requires no operands");
-	    if (!history->data) ERR(".endr requires .irp or .irpc")
-	    if (((char*)history->data->value)[0] != 'r') goto dcwa;
-	    const char *type = ll_shift(history);
-	    if (!history->data) {
-	      const char *o_label = ll_shift(dl_result);
-	      l_list *sl_data;
-	      SIDELOAD_O;
-	      if (!strcmp(type, "rc")) {
-		const char *o_operands = ll_shift(dl_result);
-		for (int i = strlen(o_operands) - 1; i >= 0; i--) {
-		  uint16_t ch = o_operands[i];
-		  sl_data = _ll_sub(dl_result, o_label, (char*) &ch);
-		  SIDELOAD(sl_data);
-		}
-		free((void*)o_operands);
-	      } else {
-		l_list *o_operands = ll_shift(dl_result);
-		for (struct _le *operand = o_operands->data; operand; operand = operand->next) {
-		  sl_data = _ll_sub(dl_result, o_label, operand->value);
-		  SIDELOAD(sl_data);
-		}
-		ll_free_val(o_operands);
-	      }
-	      free((void*)o_label);
-	      dl_result = ll_make();
-	      
-	      free(ll_shift(r_line));
-	      ll_shift(r_line);
-	      OLABEL_CLEAN;
-	      ll_free_val(r_line);
-	      ll_free_val(line);
-	      goto skip;
-	    }
-	  } else if (!strcmp(opcode, ".endm")) {
-	    if (line->size != 0) ERR(".endm requires no operands");
-	    if (!history->data) ERR(".endm requires .macro")
-	    if (((char*)history->data->value)[0] != 'm') goto dcwa;
-	    ll_shift(history);
-	    if (!history->data) {
-	      const char *o_label = ll_shift(dl_result);
-	      hm_put(macros, o_label, dl_result);
-	      dl_result = ll_make();
-	      full_skip = 1;
-	    }
-	  } else if (!strcmp(opcode, ".include")) {
-	    if (line->size != 1) ERR(".include requires 1 operand");
-	    if (!history->data) {
-	      l_list *sl_data = _pp_format(env->get_file(line->data->value), line->data->value);
-	      SIDELOAD_O;
-	      SIDELOAD(sl_data);
+	  if (!strcmp(opcode, ".set") || !strcmp(opcode, ".equ") || !strcmp(opcode, ".equiv")) {
+	    const char *result = _pp_parse_set(line, dl_result, history, symbols);
+	    if (result > (const char*) 1) ERR(result);
+	    full_skip = (size_t) result;
 
+	  } else if (!strcmp(opcode, ".err")) {
+	    const char *result = _pp_parse_err(line, dl_result, history);
+	    if (result) ERR(result);
+
+	  } else if (!strcmp(opcode, ".include")) {
+	    const char *result = _pp_parse_include(line, dl_result, history, env, files);
+	    if (result > (const char*) 1) ERR(result);
+
+	    if (result) {
 	      free(ll_shift(r_line));
 	      ll_shift(r_line);
 	      OLABEL_CLEAN;
@@ -451,42 +893,85 @@ skip:
 	      ll_free_val(line);
 	      goto skip;
 	    }
+
+	  } else if (!strcmp(opcode, ".macro")) {
+	    if (history->data && ((char*)history->data->value)[0] != 'm') goto dcwa;
+	    const char *result = _pp_parse_macro(line, dl_result, history);
+	    ll_prepend(history, "m");
+	    if (result) ERR(result);
+
+	  } else if (!strcmp(opcode, ".endm")) {
+	    if (history->data && ((char*)history->data->value)[0] != 'm') goto dcwa;
+	    const char *result = _pp_parse_endm(line, &dl_result, history, macros);
+	    if (result > (const char*) 1) ERR(result);
+	    full_skip = history->size == 0 || !strcmp(history->data->value, "i0");
+
+	  } else if (!strcmp(opcode, ".irp")) {
+	    if (history->data && ((char*)history->data->value)[0] != 'r') goto dcwa;
+	    const char *result = _pp_parse_irp(line, dl_result, history);
+	    ll_prepend(history, "rn");
+	    if (result) ERR(result);
+
+	  } else if (!strcmp(opcode, ".irpc")) {
+	    if (history->data && ((char*)history->data->value)[0] != 'r') goto dcwa;
+	    const char *result = _pp_parse_irpc(line, dl_result, history);
+	    ll_prepend(history, "rc");
+	    if (result) ERR(result);
+
+	  } else if (!strcmp(opcode, ".endr")) {
+	    if (history->data && ((char*)history->data->value)[0] != 'r') goto dcwa;
+	    const char *result = _pp_parse_endr(line, &dl_result, history, files);
+	    if (result > (const char*) 1) ERR(result);
+	    full_skip = history->size == 0 || !strcmp(history->data->value, "i0");
+
+	    if (result) {
+	      free(ll_shift(r_line));
+	      ll_shift(r_line);
+	      OLABEL_CLEAN;
+	      ll_free_val(r_line);
+	      ll_free_val(line);
+	      goto skip;
+	    }
+
+	  } else if (!strcmp(opcode, ".ifdef")) {
+	    if (history->data && ((char*)history->data->value)[0] != 'i') goto dcwa;
+	    const char *result = _pp_parse_ifdef(line, dl_result, history, symbols);
+	    if (result) ERR(result);
+
+	  } else if (!strcmp(opcode, ".ifndef")) {
+	    if (history->data && ((char*)history->data->value)[0] != 'i') goto dcwa;
+	    const char *result = _pp_parse_ifndef(line, dl_result, history, symbols);
+	    if (result) ERR(result);
+
+	  } else if (!strcmp(opcode, ".else")) {
+	    if (history->data && ((char*)history->data->value)[0] != 'i') goto dcwa;
+	    const char *result = _pp_parse_else(line, dl_result, history);
+	    if (result > (const char*) 1) ERR(result);
+	    full_skip = (size_t) result;
+
+	  } else if (!strcmp(opcode, ".endif")) {
+	    if (history->data && ((char*)history->data->value)[0] != 'i') goto dcwa;
+	    const char *result = _pp_parse_endif(line, &dl_result, history, files);
+	    if (result > (const char*) 1) ERR(result);
+	    full_skip = history->size == 0 || !strcmp(history->data->value, "i0");
+
+	    if (result) {
+	      free(ll_shift(r_line));
+	      ll_shift(r_line);
+	      OLABEL_CLEAN;
+	      ll_free_val(r_line);
+	      ll_free_val(line);
+	      goto skip;
+	    }
+
 	  } else {
 	    full_skip = history->data && !strcmp(history->data->value, "i0");
 	  }
 	} else if (hm_contains(macros, opcode)) {
-	  l_list *o_sl_data = hm_get(macros, opcode), *sl_data = ll_make();
-	  l_list *o_operands = ll_shift(o_sl_data), *operands = ll_make();
+	  l_list *o_sl_data = hm_get(macros, opcode)->value;
+	  const char *result = _pp_macro_sub(line, o_sl_data, files);
+	  if (result) ERR(result);
 
-	  for (struct _le *entry = o_sl_data->data; entry; entry = entry->next) {
-	    l_list *entry_str = _copy_line(entry->value);
-	    ll_append(sl_data, entry_str);
-	  }
-	  for (struct _le *entry = o_operands->data; entry; entry = entry->next) {
-	    char *entry_str = emalloc(strlen(entry->value) + 1);
-	    strcpy(entry_str, entry->value);
-	    ll_append(operands, entry_str);
-	  }
-	  ll_prepend(o_sl_data, o_operands);
-
-	  struct _le *c_entry = line->data;
-	  while (operands->data) {
-	    l_list *se = _ll_from(ll_shift(operands), '=');
-	    const char *what = se->data->value, *with;
-	    if (se->size > 2) ERR(".macro operand must be 'a=c' or 'a'")
-	    else if (c_entry) { with = c_entry->value; c_entry = c_entry->next; }
-	    else if (se->size == 2) with = se->data->next->value;
-	    else ERR("Macro call requires more arguments");
-	    l_list *t_sl_data = _ll_sub(sl_data, what, with);
-	    ll_free_val(sl_data);
-	    sl_data = t_sl_data;
-	    ll_free_val(se);
-	  }
-	  SIDELOAD_O;
-	  SIDELOAD(sl_data);
-	  ll_free_val(operands);
-	  
-	  //TODO currently label on macros is ignored, maybe put it to a new line
 	  free(ll_shift(r_line));
 	  ll_shift(r_line);
 	  OLABEL_CLEAN;
@@ -495,14 +980,11 @@ skip:
 	  goto skip;
 	}
       }
-dcwa: //Dont care + Who asked
-      {
-	while(line->data) {
-	  ll_append(r_line, ll_shift(line));
-	}
+dcwa:
+      while(line->data) {
+	ll_append(r_line, ll_shift(line));
       }
       ll_free(line);
-
 
       if (!full_skip) {
 	if (!out_skip) ll_append(result, r_line);
@@ -521,6 +1003,7 @@ dcwa: //Dont care + Who asked
 	ll_free_val(r_line);
       }
     }
+    ll_shift(files);
     ll_free(file);
   }
   //FIXME memory leak in "macros": "operands[*f_line]" not freed correctly 
@@ -533,18 +1016,19 @@ dcwa: //Dont care + Who asked
   return result;
 }
 
-//Signature (data[*f_line...])==>data[#*symbol[address, section], #section[size, symbol[address, *name, 32-bit]..., *bytecode]]
+//Signature (data[*f_line...])==>data[#*symbol[address, section], sections[unwrap$[*name, section[size, symbol[address, *name, 32-bit]..., *bytecode]]...]]
 l_list *compile(l_list *data, cmpl_env *env) {
-  //Signature result[#*symbol[address, section], #section[address, 32-bit, symbol[address, *name, 32-bit]..., *raw_code...]]
+  //Signature result[#*symbol[address, section], #*section[address, 32-bit, symbol[address, *name, 32-bit]..., *raw_code...]]
   l_list *result = ll_make(), *section;
-  hashmap *equs = hm_make(); // #*equs[*with]
-  //FIXME potential memory leak, can be either static or dynamic
-  char *s_name = ".text";
+  char *s_name;
   {
+    hashmap *sections = hm_make();
     ll_append(result, hm_make());
-    ll_append(result, hm_make());
+    ll_append(result, sections);
+    s_name = emalloc(6);
+    strcpy(s_name, ".text");
     section = ll_make();
-    hm_put(result->data->next->value, s_name, section);
+    hm_put(sections, s_name, section);
     ll_append(section, 0);
     ll_append(section, (void*)1);
     ll_append(section, ll_make());
@@ -560,7 +1044,7 @@ l_list *compile(l_list *data, cmpl_env *env) {
 	if (!hm_contains(result->data->value, label)) {
 	  l_list *r_label = ll_make();
 	  ll_append(r_label, section->data->value);
-	  ll_append(r_label, section->data->next->value);
+	  ll_append(r_label, s_name);
 	  hm_put(result->data->value, label, r_label);
 	} else {
 	  ERR("Label redefinition");
@@ -569,252 +1053,58 @@ l_list *compile(l_list *data, cmpl_env *env) {
     }
     
     if (line->data) {
-      char *opcode = ll_shift(data);
+      char *opcode = ll_shift(line);
       if (_s_with(opcode, '.')) {
 	if (!strcmp(opcode, ".byte")) {
-	  if (line->size > 0) {
-	    int8_t *o_mem = emalloc(line->size);
-	    l_list *mem = ll_make();
-	    ADDR_ADD(line->size);
-	    ll_append(section, mem);
-	    ll_append(mem, (void*) line->size);
-	    ll_append(mem, o_mem);
-	    while (line->data) {
-	      char *operand = ll_shift(line);
-	      int i_operand = strtol(operand, 0, 0);
-	      *o_mem++ = (int8_t) i_operand;
-	      free(operand);
-	    }
-	  }
+	  _cl_parse_int(line, section, 1);
 	} else if (!strcmp(opcode, ".short")) {
-	  if (line->size > 0) {
-	    int16_t *o_mem = emalloc(line->size*2);
-	    l_list *mem = ll_make();
-	    ADDR_ADD(line->size*2);
-	    ll_append(section, mem);
-	    ll_append(mem, (void*) (line->size*2));
-	    ll_append(mem, o_mem);
-	    while (line->data) {
-	      char *operand = ll_shift(line);
-	      int i_operand = strtol(operand, 0, 0);
-	      *o_mem++ = (int16_t) i_operand;
-	      free(operand);
-	    }
-	  }
+	  _cl_parse_int(line, section, 2);
 	} else if (!strcmp(opcode, ".int")) {
-	  if (line->size > 0) {
-	    int32_t *o_mem = emalloc(line->size*4);
-	    l_list *mem = ll_make();
-	    ADDR_ADD(line->size*4);
-	    ll_append(section, mem);
-	    ll_append(mem, (void*) (line->size*4));
-	    ll_append(mem, o_mem);
-	    while (line->data) {
-	      char *operand = ll_shift(line);
-	      int i_operand = strtol(operand, 0, 0);
-	      *o_mem++ = (int32_t) i_operand;
-	      free(operand);
-	    }
-	  }
+	  _cl_parse_int(line, section, 4);
 	} else if (!strcmp(opcode, ".long")) {
-	  if (line->size > 0) {
-	    int64_t *o_mem = emalloc(line->size*8);
-	    l_list *mem = ll_make();
-	    ADDR_ADD(line->size*8);
-	    ll_append(section, mem);
-	    ll_append(mem, (void*) (line->size*8));
-	    ll_append(mem, o_mem);
-	    while (line->data) {
-	      char *operand = ll_shift(line);
-	      long long int i_operand = strtoll(operand, 0, 0);
-	      *o_mem++ = (int64_t) i_operand;
-	      free(operand);
-	    }
-	  }
-	} else if (!strcmp(opcode, ".single") ||
-	    !strcmp(opcode, ".float")) {
-	  if (line->size > 0) {
-	    float *o_mem = emalloc(line->size*4);
-	    l_list *mem = ll_make();
-	    ADDR_ADD(line->size*4);
-	    ll_append(section, mem);
-	    ll_append(mem, (void*) (line->size*4));
-	    ll_append(mem, o_mem);
-	    while (line->data) {
-	      char *operand = ll_shift(line);
-	      float i_operand = strtof(operand, 0);
-	      *o_mem++ = (float) i_operand;
-	      free(operand);
-	    }
-	  }
+	  _cl_parse_int(line, section, 8);
+	} else if (!strcmp(opcode, ".single") || !strcmp(opcode, ".float")) {
+	  _cl_parse_float(line, section);
 	} else if (!strcmp(opcode, ".double")) {
-	  if (line->size > 0) {
-	    double *o_mem = emalloc(line->size*8);
-	    l_list *mem = ll_make();
-	    ADDR_ADD(line->size*8);
-	    ll_append(section, mem);
-	    ll_append(mem, (void*) (line->size*8));
-	    ll_append(mem, o_mem);
-	    while (line->data) {
-	      char *operand = ll_shift(line);
-	      double i_operand = strtod(operand, 0);
-	      *o_mem++ = (double) i_operand;
-	      free(operand);
-	    }
-	  }
+	  _cl_parse_double(line, section);
 	} else if (!strcmp(opcode, ".ascii")) {
-	  if (line->size > 0) {
-	    size_t calc_size = 0;
-	    for (struct _le *entry = line->data; entry; entry = entry->next)
-	      calc_size += strlen(entry->value);
-	    char *o_mem = emalloc(calc_size);
-	    l_list *mem = ll_make();
-	    ADDR_ADD(calc_size);
-	    ll_append(section, mem);
-	    ll_append(mem, (void*) calc_size);
-	    ll_append(mem, o_mem);
-	    while (line->data) {
-	      char *operand = ll_shift(line);
-	      size_t loc_size = strlen(operand);
-	      memcpy(o_mem, operand, loc_size);
-	      o_mem += loc_size;
-	      free(operand);
-	    }
-	  }
+	  _cl_parse_ascii(line, section);
 	} else if (!strcmp(opcode, ".asciz")) {
-	  if (line->size > 0) {
-	    size_t calc_size = 0;
-	    for (struct _le *entry = line->data; entry; entry = entry->next)
-	      calc_size += strlen(entry->value) + 1;
-	    char *o_mem = emalloc(calc_size);
-	    l_list *mem = ll_make();
-	    ADDR_ADD(calc_size);
-	    ll_append(section, mem);
-	    ll_append(mem, (void*) calc_size);
-	    ll_append(mem, o_mem);
-	    while (line->data) {
-	      char *operand = ll_shift(line);
-	      size_t loc_size = strlen(operand) + 1;
-	      memcpy(o_mem, operand, loc_size);
-	      o_mem += loc_size;
-	      free(operand);
-	    }
-	  }
-	} else if (!strcmp(opcode, ".space") ||
-	    !strcmp(opcode, ".skip")) {
-	  if (line->size > 2 || line->size < 1) ERR(".space/.skip requires 2 or 1 operands");
-	  char *o_size = ll_shift(line);
-	  size_t size = strtol(o_size, 0, 0), val = 0;
-	  free(o_size);
-	  if (line->data) {
-	    char *o_val = ll_shift(line);
-	    val = strtol(o_val, 0, 0);
-	    free(o_val);
-	  }
-	  if (!size) ERR(".space/.skip requires a valid size");
-	  int8_t *o_mem = emalloc(size);
-	  l_list *mem = ll_make();
-	  ADDR_ADD(size);
-	  ll_append(section, mem);
-	  ll_append(mem, (void*) size);
-	  ll_append(mem, o_mem);
-	  memset(o_mem, (int8_t)val, size);
+	  _cl_parse_asciz(line, section);
+	} else if (!strcmp(opcode, ".space") || !strcmp(opcode, ".skip")) {
+	  const char *err = _cl_parse_skip(line, section);
+	  if (err) ERR(err);
 	} else if (!strcmp(opcode, ".fill")) {
-	  if (line->size > 3 || line->size < 1) ERR(".fill requires between 3 and 1 operands");
-	  char *o_repeat = ll_shift(line);
-	  size_t repeat = strtol(o_repeat, 0, 0), size = 1, val = 0;
-	  free(o_repeat);
-	  if (line->data) {
-	    char *o_size = ll_shift(line);
-	    size = strtol(o_size, 0, 0);
-	    free(o_size);
-	    if(!size) size = 1;
-	    else if (size > 8) ERR(".fill requires a size less or equal than 8");
-	  }
-	  if (line->data) {
-	    char *o_val = ll_shift(line);
-	    val = strtol(o_val, 0, 0);
-	    free(o_val);
-	  }
-	  if (!repeat) ERR(".fill requires a valid repeat");
-	  int8_t *o_mem = emalloc(size*repeat);
-	  l_list *mem = ll_make();
-	  ADDR_ADD(size*repeat);
-	  ll_append(section, mem);
-	  ll_append(mem, (void*) (size*repeat));
-	  ll_append(mem, o_mem);
-	  for (size_t i = 0; i < size*repeat; i += size) {
-	    memcpy(o_mem+i, &val, size);
-	  }
+	  const char *err = _cl_parse_fill(line, section);
+	  if (err) ERR(err);
 	} else if (!strcmp(opcode, ".align")) {
-	  //TODO .balign and .p2align
-	  if (line->size > 3 || line->size < 1) ERR(".align requires between 3 and 1 operands");
-	  char *o_align = ll_shift(line);
-	  size_t align = strtol(o_align, 0, 0), val = 0, max = 0;
-	  free(o_align);
-	  if (line->data) {
-	    char *o_val = ll_shift(line);
-	    val = strtol(o_val, 0, 0);
-	    free(o_val);
-	  }
-	  if (line->data) {
-	    char *o_max = ll_shift(line);
-	    max = strtol(o_max, 0, 0);
-	    free(o_max);
-	  }
-	  if (!align) ERR(".align requires a valid alignment");
-	  size_t *addr_ptr = (size_t*)&(section->data->value);
-	  size_t needed = (align - (*addr_ptr % align)) % align;
-	  if (needed && (!max || needed < max)) {
-	    int8_t *o_mem = emalloc(needed);
-	    l_list *mem = ll_make();
-	    *addr_ptr += needed;
-	    ll_append(section, mem);
-	    ll_append(mem, (void*) needed);
-	    ll_append(mem, o_mem);
-	    memset(o_mem, (int8_t)val, needed);
-	  }
+	  const char *err = _cl_parse_align(line, section);
+	  if (err) ERR(err);
 	} else if (!strcmp(opcode, ".org")) {
-	  if (line->size > 2 || line->size < 1) ERR(".org requires 2 or 1 operands");
-	  char *o_until = ll_shift(line);
-	  size_t until = strtol(o_until, 0, 0), val = 0;
-	  free(o_until);
-	  if (line->data) {
-	    char *o_val = ll_shift(line);
-	    val = strtol(o_val, 0, 0);
-	    free(o_val);
-	  }
-	  if (!until) ERR(".org requires a valid address");
-	  size_t *addr_ptr = (size_t*)&(section->data->value);
-	  if (until > *addr_ptr) {
-	    size_t needed = until - *addr_ptr;
-	    int8_t *o_mem = emalloc(needed);
-	    l_list *mem = ll_make();
-	    *addr_ptr += needed;
-	    ll_append(section, mem);
-	    ll_append(mem, (void*) needed);
-	    ll_append(mem, o_mem);
-	    memset(o_mem, (int8_t)val, needed);
-	  }
+	  const char *err = _cl_parse_org(line, section);
+	  if (err) ERR(err);
 	} else if (!strcmp(opcode, ".code16")) {
 	  if (line->data) ERR(".code16 requires no arguments");
 	  section->data->next->value = 0;
 	} else if (!strcmp(opcode, ".code32")) {
 	  if (line->data) ERR(".code32 requires no arguments");
 	  section->data->next->value = (void*) 1;
-	} else if (!strcmp(opcode, ".set") ||
-	    !strcmp(opcode, ".equ")) {
-	  if (line->size != 2) ERR(".set/.equ requires 2 operands");
-
+	} else if (!strcmp(opcode, ".set") || !strcmp(opcode, ".equ")) {
+	  const char *err = _cl_parse_equ(line, section, result->data->value);
+	  if (err) ERR(err);
 	} else if (!strcmp(opcode, ".equiv")) {
-	  if (line->size != 2) ERR(".equiv requires 2 operands");
-
+	  const char *err = _cl_parse_equiv(line, section, result->data->value);
+	  if (err) ERR(err);
 	} else if (!strcmp(opcode, ".section")) {
-
+	  if (line->size != 1) ERR(".section requires 1 operand");
+	  char *name = ll_shift(line);
+	  _cl_parse_section(result->data->next->value, name, &section, &s_name);
+	  free(name);
 	} else if (!strcmp(opcode, ".data")) {
-
+	  if (line->size != 0) ERR(".data requires no operands");
+	  _cl_parse_section(result->data->next->value, ".data", &section, &s_name);
 	} else if (!strcmp(opcode, ".text")) {
-
+	  _cl_parse_section(result->data->next->value, ".text", &section, &s_name);
 	} else if (!strcmp(opcode, ".comm")) {
 
 	} else if (!strcmp(opcode, ".lcomm")) {
@@ -822,10 +1112,150 @@ l_list *compile(l_list *data, cmpl_env *env) {
 	} else if (!strcmp(opcode, ".globl")) {
 
 	} else {
-
+	  ERR("Unknown directive");
 	}
       } else {
-
+	if (!strcmp(opcode, "nop")) {
+	  const char *err = _cl_parsei_pure(line, section, I_NOP);
+	  if (err) ERR(err);
+	} else if (!strcmp(opcode, "sleep")) {
+	  const char *err = _cl_parsei_1reg_imm(line, section, I_SLEEP, I_SLEEPI);
+	  if (err) ERR(err);
+	} else if (!strcmp(opcode, "gipc")) {
+	  const char *err = _cl_parsei_1reg(line, section, I_GIPC);
+	  if (err) ERR(err);
+	} else if (!strcmp(opcode, "mov")) {
+	  const char *err = _cl_parsei_2reg_imm(line, section, I_MOV, I_MOVI);
+	  if (err) ERR(err);
+	} else if (!strcmp(opcode, "swap")) {
+	  const char *err = _cl_parsei_2reg(line, section, I_SWAP);
+	  if (err) ERR(err);
+	} else if (!strcmp(opcode, "push")) {
+	  const char *err = _cl_parsei_1reg(line, section, I_PUSH);
+	  if (err) ERR(err);
+	} else if (!strcmp(opcode, "pop")) {
+	  const char *err = _cl_parsei_1reg(line, section, I_POP);
+	  if (err) ERR(err);
+	} else if (!strcmp(opcode, "add")) {
+	  const char *err = _cl_parsei_2reg_imm(line, section, I_ADD, I_ADI);
+	  if (err) ERR(err);
+	} else if (!strcmp(opcode, "sub")) {
+	  const char *err = _cl_parsei_2reg_imm(line, section, I_SUB, I_SBI);
+	  if (err) ERR(err);
+	} else if (!strcmp(opcode, "mul")) {
+	  const char *err = _cl_parsei_2reg(line, section, I_MUL);
+	  if (err) ERR(err);
+	} else if (!strcmp(opcode, "div")) {
+	  const char *err = _cl_parsei_2reg(line, section, I_DIV);
+	  if (err) ERR(err);
+	} else if (!strcmp(opcode, "mod")) {
+	  const char *err = _cl_parsei_2reg(line, section, I_MOD);
+	  if (err) ERR(err);
+	} else if (!strcmp(opcode, "inc")) {
+	  const char *err = _cl_parsei_1reg(line, section, I_INC);
+	  if (err) ERR(err);
+	} else if (!strcmp(opcode, "dec")) {
+	  const char *err = _cl_parsei_1reg(line, section, I_DEC);
+	  if (err) ERR(err);
+	} else if (!strcmp(opcode, "fadd")) {
+	  const char *err = _cl_parsei_2reg(line, section, I_FADD);
+	  if (err) ERR(err);
+	} else if (!strcmp(opcode, "fsub")) {
+	  const char *err = _cl_parsei_2reg(line, section, I_FSUB);
+	  if (err) ERR(err);
+	} else if (!strcmp(opcode, "fmul")) {
+	  const char *err = _cl_parsei_2reg(line, section, I_FMUL);
+	  if (err) ERR(err);
+	} else if (!strcmp(opcode, "fdiv")) {
+	  const char *err = _cl_parsei_2reg(line, section, I_FDIV);
+	  if (err) ERR(err);
+	} else if (!strcmp(opcode, "i2f")) {
+	  const char *err = _cl_parsei_2reg(line, section, I_I2F);
+	  if (err) ERR(err);
+	} else if (!strcmp(opcode, "f2i")) {
+	  const char *err = _cl_parsei_2reg(line, section, I_F2I);
+	  if (err) ERR(err);
+	} else if (!strcmp(opcode, "xor")) {
+	  const char *err = _cl_parsei_2reg_imm(line, section, I_XOR, I_XORI);
+	  if (err) ERR(err);
+	} else if (!strcmp(opcode, "or")) {
+	  const char *err = _cl_parsei_2reg_imm(line, section, I_OR, I_ORI);
+	  if (err) ERR(err);
+	} else if (!strcmp(opcode, "and")) {
+	  const char *err = _cl_parsei_2reg_imm(line, section, I_AND, I_ANDI);
+	  if (err) ERR(err);
+	} else if (!strcmp(opcode, "not")) {
+	  const char *err = _cl_parsei_1reg(line, section, I_NOT);
+	  if (err) ERR(err);
+	} else if (!strcmp(opcode, "bts")) {
+	  const char *err = _cl_parsei_1reg_1imm(line, section, I_BTS);
+	  if (err) ERR(err);
+	} else if (!strcmp(opcode, "btr")) {
+	  const char *err = _cl_parsei_1reg_1imm(line, section, I_BTR);
+	  if (err) ERR(err);
+	} else if (!strcmp(opcode, "btc")) {
+	  const char *err = _cl_parsei_1reg_1imm(line, section, I_BTC);
+	  if (err) ERR(err);
+	} else if (!strcmp(opcode, "shl")) {
+	  const char *err = _cl_parsei_1reg_1imm(line, section, I_SHL);
+	  if (err) ERR(err);
+	} else if (!strcmp(opcode, "shr")) {
+	  const char *err = _cl_parsei_1reg_1imm(line, section, I_SHR);
+	  if (err) ERR(err);
+	} else if (!strcmp(opcode, "rol")) {
+	  const char *err = _cl_parsei_1reg_1imm(line, section, I_ROL);
+	  if (err) ERR(err);
+	} else if (!strcmp(opcode, "ror")) {
+	  const char *err = _cl_parsei_1reg_1imm(line, section, I_ROR);
+	  if (err) ERR(err);
+	} else if (!strcmp(opcode, "int")) {
+	  const char *err = _cl_parsei_1imm(line, section, I_INT);
+	  if (err) ERR(err);
+	} else if (!strcmp(opcode, "jmp")) {
+	  const char *err = _cl_parsei_1reg_imm(line, section, I_JMP, I_JMPI);
+	  if (err) ERR(err);
+	} else if (!strcmp(opcode, "call")) {
+	  const char *err = _cl_parsei_1reg_imm(line, section, I_CALL, I_CALLI);
+	  if (err) ERR(err);
+	} else if (!strcmp(opcode, "rjmp")) {
+	  const char *err = _cl_parsei_1reg_imm(line, section, I_RJMP, I_RJMPI);
+	  if (err) ERR(err);
+	} else if (!strcmp(opcode, "rcall")) {
+	  const char *err = _cl_parsei_1reg_imm(line, section, I_RCALL, I_RCALLI);
+	  if (err) ERR(err);
+	} else if (!strcmp(opcode, "jc")) { //TODO add most common
+	  const char *err = _cl_parsei_jcc(line, section);
+	  if (err) ERR(err);
+	} else if (!strcmp(opcode, "movc")) { //TODO add most common
+	  const char *err = _cl_parsei_movcc(line, section);
+	  if (err) ERR(err);
+	} else if (!strcmp(opcode, "ret")) {
+	  const char *err = _cl_parsei_pure(line, section, I_RET);
+	  if (err) ERR(err);
+	} else if (!strcmp(opcode, "in")) {
+	  const char *err = _cl_parsei_2reg_imm(line, section, I_IN, I_INI);
+	  if (err) ERR(err);
+	} else if (!strcmp(opcode, "out")) {
+	  const char *err = _cl_parsei_2reg_imm(line, section, I_OUT, I_OUTI);
+	  if (err) ERR(err);
+	} else if (!strcmp(opcode, "crld")) {
+	  const char *err = _cl_parsei_2reg(line, section, I_CRLD);
+	  if (err) ERR(err);
+	} else if (!strcmp(opcode, "crst")) {
+	  const char *err = _cl_parsei_2reg(line, section, I_CRST);
+	  if (err) ERR(err);
+	} else if (!strcmp(opcode, "sei")) {
+	  const char *err = _cl_parsei_pure(line, section, I_SEI);
+	  if (err) ERR(err);
+	} else if (!strcmp(opcode, "cli")) {
+	  const char *err = _cl_parsei_pure(line, section, I_CLI);
+	  if (err) ERR(err);
+	} else if (!strcmp(opcode, "iret")) {
+	  const char *err = _cl_parsei_pure(line, section, I_IRET);
+	  if (err) ERR(err);
+	} else {
+	  ERR("Invalid opcode");
+	}     
       }
       free(opcode);
     }
@@ -834,6 +1264,31 @@ l_list *compile(l_list *data, cmpl_env *env) {
     ll_free_val(line);
   }
   ll_free(data);
+  {
+    hashmap *sections = ll_pop(result);
+    l_list *f_sections = hm_free_to(sections);
+    
+    for (struct _le *entry = f_sections->data; entry; entry = entry->next) {
+      l_list *sect = ((l_list*)entry->value)->data->next->value;
+      size_t sect_size = (size_t) ll_shift(sect);
+      ll_shift(sect);
+      void* nn1 = ll_shift(sect);
+      uint8_t *o_product = emalloc(sect_size), *product = o_product;
+      while(sect->data) {
+	l_list *part = ll_shift(sect);
+	size_t len = (size_t) ll_shift(part);
+	uint8_t *data = part->data->value;
+	memcpy(product, data, len);
+	product += len;
+	ll_free_val(part);
+      }
+      ll_append(sect, (void*)sect_size);
+      ll_append(sect, nn1);
+      ll_append(sect, o_product);
+    }
+
+    ll_append(result, f_sections);
+  }
   return result;
 }
 

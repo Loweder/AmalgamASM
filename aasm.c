@@ -594,43 +594,43 @@ void execute_simple(hw *s, cpu *core) {
       core->sleep = 1;
       return;
     case I_JMP:
+      ifmem(1) GPR(IP) = *MMUS_16(GPR_16(1));
+      else GPR(IP) = GPR_16(1);
+      core->sleep = 1;
+      return;
+    case I_JMPI:
       GPR(IP) = IMM_16(1);
       core->sleep = 1;
       return;
     case I_CALL:
       *MMUS_16(GPR(SP) -= 2) = GPR(IP);
+      ifmem(1) GPR(IP) = *MMUS_16(GPR_16(1));
+      else GPR(IP) = GPR_16(1);
+      core->sleep = 1;
+      return;
+    case I_CALLI:
+      *MMUS_16(GPR(SP) -= 2) = GPR(IP);
       GPR(IP) = IMM_16(1);
       core->sleep = 1;
       return;
-    case I_IJMP:
-      ifmem(1) GPR(IP) = *MMUS_16(GPR_16(1));
-      else GPR(IP) = GPR_16(1);
-      core->sleep = 1;
-      return;
-    case I_ICALL:
-      *MMUS_16(GPR(SP) -= 2) = GPR(IP);
-      ifmem(1) GPR(IP) = *MMUS_16(GPR_16(1));
-      else GPR(IP) = GPR_16(1);
-      core->sleep = 1;
-      return;
     case I_RJMP:
+      ifmem(1) GPR(IP) += *MMUS_16(GPR_16(1));
+      else GPR(IP) += GPR_16(1);
+      core->sleep = 1;
+      return;
+    case I_RJMPI:
       GPR(IP) += IMM_16(1);
       core->sleep = 1;
       return;
     case I_RCALL:
       *MMUS_16(GPR(SP) -= 2) = GPR(IP);
-      GPR(IP) += IMM_16(1);
-      core->sleep = 1;
-      return;
-    case I_RIJMP:
       ifmem(1) GPR(IP) += *MMUS_16(GPR_16(1));
       else GPR(IP) += GPR_16(1);
       core->sleep = 1;
       return;
-    case I_RICALL:
+    case I_RCALLI:
       *MMUS_16(GPR(SP) -= 2) = GPR(IP);
-      ifmem(1) GPR(IP) += *MMUS_16(GPR_16(1));
-      else GPR(IP) += GPR_16(1);
+      GPR(IP) += IMM_16(1);
       core->sleep = 1;
       return;
     case I_JC:
@@ -937,8 +937,6 @@ void execute_complex(hw *s, cpu *core) {
       break;
     case I_MOVI:
       break;
-    case I_FMOVI:
-      break;
     case I_SWAP:
       break;
     case I_PUSH:
@@ -1042,9 +1040,9 @@ void execute_complex(hw *s, cpu *core) {
     case I_INT:
       size = 2;
       break;
-    case I_JMP:
+    case I_JMPI:
       break;
-    case I_IJMP:
+    case I_JMP:
       break;
     case I_JC:
       break;

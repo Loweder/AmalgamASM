@@ -8,7 +8,7 @@
 typedef enum {
   I_NOP = 0x00, I_SLEEP, I_SLEEPI, I_GIPC,
   
-  I_MOV = 0x10, I_MOVI, I_FMOVI, I_SWAP, I_PUSH, I_POP,
+  I_MOV = 0x10, I_MOVI, I_SWAP, I_PUSH, I_POP,
  
   //TODO w/carry opcodes
   I_ADD = 0x20, I_ADI, I_SUB, I_SBI, 
@@ -20,8 +20,8 @@ typedef enum {
   I_BTS, I_BTR, I_BTC,
   I_SHL, I_SHR, I_ROL, I_ROR,
  
-  I_INT = 0x60, I_JMP, I_CALL, I_IJMP, I_ICALL, 
-  I_RJMP, I_RCALL, I_RIJMP, I_RICALL, 
+  I_INT = 0x60, I_JMP, I_JMPI, I_CALL, I_CALLI, 
+  I_RJMP, I_RJMPI, I_RCALL, I_RCALLI, 
   I_JC, I_JNC, I_MOVC, I_MOVNC, I_RET,
   
   IP_FLAGS = 0xA0,

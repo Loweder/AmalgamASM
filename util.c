@@ -116,17 +116,29 @@ hashmap *hm_make(void) {
   return res;
 }
 
-uint8_t hm_contains(const hashmap *map, const char *str) {
+struct _lkee *hm_get(hashmap *map, const char *str) {
   uint64_t s_hash = hash(str);
-  for (const struct _lkee *bucket = map->buckets[s_hash % map->capacity]; bucket; bucket = bucket->next) {
-    if (bucket->key == s_hash && !strcmp(str, bucket->str)) return 1;
+  for (struct _lkee *bucket = map->buckets[s_hash % map->capacity]; bucket; bucket = bucket->next) {
+    if (bucket->key == s_hash && !strcmp(str, bucket->str)) return bucket;
   }
   return 0;
 }
 
-void hm_put(hashmap *map, const char *str, void *value) {
+uint8_t hm_contains(const hashmap *map, const char *str) {
+  struct _lkee *bucket = hm_get((hashmap*)map, str);
+  return bucket != 0;
+}
+
+void *hm_put(hashmap *map, const char *str, void *value) {
+  struct _lkee *bucket = hm_get(map, str);
+  if (bucket) {
+    void *old_data = bucket->value;
+    bucket->value = value;
+    return old_data;
+  }
+
   uint64_t s_hash = hash(str);
-  struct _lkee *bucket = NEW(struct _lkee);
+  bucket = NEW(struct _lkee);
   bucket->next = map->buckets[s_hash % map->capacity];
   map->buckets[s_hash % map->capacity] = bucket;
   bucket->key = s_hash;
@@ -134,26 +146,20 @@ void hm_put(hashmap *map, const char *str, void *value) {
   bucket->value = value;
   map->size++;
   if (((double)map->size / (double)map->capacity) > 2) hm_rehash(map);
-}
-
-void *hm_get(hashmap *map, const char *str) {
-  uint64_t s_hash = hash(str);
-  for (const struct _lkee *bucket = map->buckets[s_hash % map->capacity]; bucket; bucket = bucket->next) {
-    if (bucket->key == s_hash && !strcmp(str, bucket->str)) return bucket->value;
-  }
   return 0;
 }
 
-void hm_erase(hashmap *map, const char *str) {
+struct _lkee *hm_erase(hashmap *map, const char *str) {
   uint64_t s_hash = hash(str);
   for (struct _lkee **bucket = &(map->buckets[s_hash % map->capacity]); *bucket; bucket = &((*bucket)->next)) {
     if ((*bucket)->key == s_hash && (*bucket)->str == str) {
       struct _lkee *s_bucket = *bucket;
-      *bucket = (*bucket)->next;
-      free(s_bucket);
-      break;
+      *bucket = s_bucket->next;
+      map->size--;
+      return s_bucket;
     }
   }
+  return 0;
 }
 
 void hm_rehash(hashmap *map) {
@@ -204,6 +210,25 @@ void hm_free_val(hashmap *map) {
   free(map);
 }
 
+l_list *hm_free_to(hashmap *map) {
+  l_list *result = ll_make();
+  for (int i = 0; i < map->capacity; i++) {
+    struct _lkee *bucket = map->buckets[i], *s_bucket;
+    while (bucket) {
+      l_list *entry = ll_make();
+      ll_append(result, entry);
+      s_bucket = bucket;
+      bucket = bucket->next;
+      ll_append(entry, (char*) s_bucket->str);
+      ll_append(entry, s_bucket->value);
+      free(s_bucket);
+    }
+  }
+  free(map->buckets);
+  free(map);
+  return result;
+}
+
 
 l_list *ll_make(void) {
   l_list *res = NEW(l_list);
@@ -233,17 +258,23 @@ void ll_prepend(l_list *list, void *value) {
 void *ll_pop(l_list *list) {
   if (!list->size) return 0;
   list->size--;
-  //WARN: Pointer "struct _le**" to "struct _le*" manipulation
-  struct _le *data = (struct _le*) list->last;
-  void *value = data->value;
-  *(list->last) = data->next;
-  free(data);
-  return value;
+  for (struct _le **data = &list->data; *data; data = &((*data)->next)) {
+    if (!(*data)->next) {
+      struct _le *r_data = *data;
+      void *value = r_data->value;
+      list->last = data;
+      *data = 0;
+      free(r_data);
+      return value;
+    }
+  }
+  return 0;
 }
 
 void *ll_shift(l_list *list) {
   if (!list->size) return 0;
   list->size--;
+  if (list->size == 0) list->last = &list->data;
   struct _le *data = list->data;
   void *value = data->value;
   list->data = data->next;
