@@ -494,17 +494,17 @@ void execute_simple(hw *s, cpu *core) {
     case I_BTS:
       ifmem(1) *MMUS_32(GPR_16(1)) |= (1 << (insn[2] & 0x1F));
       else GPR_32(1) |= (1 << (insn[2] & 0x1F));
-      size = 3;
+      size = 4;
       break;
     case I_BTR:
       ifmem(1) *MMUS_32(GPR_16(1)) &= ~(1 << (insn[2] & 0x1F));
       else GPR_32(1) &= ~(1 << (insn[2] & 0x1F));
-      size = 3;
+      size = 4;
       break;
     case I_BTC:
       ifmem(1) *MMUS_32(GPR_16(1)) ^= (1 << (insn[2] & 0x1F));
       else GPR_32(1) ^= (1 << (insn[2] & 0x1F));
-      size = 3;
+      size = 4;
       break;
 
     case I_SHL:
@@ -518,7 +518,7 @@ void execute_simple(hw *s, cpu *core) {
 	  else GPR_16(1) <<= (insn[2] & 0x0F);
 	  break;
       }
-      size = 3;
+      size = 4;
       break;
     case I_SHR:
       switch(REG_LN(insn[1])) {
@@ -531,7 +531,7 @@ void execute_simple(hw *s, cpu *core) {
 	  else GPR_16(1) >>= (insn[2] & 0x0F);
 	  break;
       }
-      size = 3;
+      size = 4;
       break;
     case I_ROL:
       switch(REG_LN(insn[1])) {
@@ -558,7 +558,7 @@ void execute_simple(hw *s, cpu *core) {
 	    break;
 	  }
       }
-      size = 3;
+      size = 4;
       break;
     case I_ROR:
       switch(REG_LN(insn[1])) {
@@ -585,7 +585,7 @@ void execute_simple(hw *s, cpu *core) {
 	    break;
 	  }
       }
-      size = 3;
+      size = 4;
       break;
 
 

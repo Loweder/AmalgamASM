@@ -31,7 +31,7 @@ typedef enum {
 } insn;
 
 typedef enum {
-  JC = 0xF0, JO = 0xF1, JZ = 0xF2, JS = 0xF3, JGE = 0x31
+  JC = 0x80, JO = 0x81, JZ = 0x82, JS = 0x83, JGE = 0x31
 } jcc;
 
 typedef enum {

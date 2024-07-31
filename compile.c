@@ -11,12 +11,17 @@
   size_t *addr_ptr = (size_t*) &(section->data->value);\
   *addr_ptr += count;
 #define ERR(code) { snprintf(env->err, 100, "%s:%ld: %s", f_name, f_line, code); return 0; }
+
 #define OLABEL_CLEAN {\
   char *o_label = ll_shift(r_line);\
   if (o_label && !hs_contains(orphan_symbols, o_label))\
     hs_put(orphan_symbols, o_label);\
   else free(o_label);\
 } 
+
+#define T_REGISTER 0
+#define T_LITERAL 1
+#define T_ILLEGAL 0xFF
 
 static void _debug_print_line(l_list *line) {
   char *file_name = line->data->value;
@@ -62,6 +67,9 @@ static uint8_t _e_with(const char *data, char sym) {
 static uint8_t _is_space(char datum) {
   return datum == ' ' || datum == '\t' || datum == '\0';
 }
+static uint8_t _is_s_space(char datum) {
+  return _is_space(datum) || datum == ',';
+}
 
 static void _clear_ws(char **data) {
   uint8_t flag = 1, par = 0;
@@ -70,8 +78,8 @@ static void _clear_ws(char **data) {
     if (_is_space(*src)) {
       if (!flag || par) {flag = 1; size++; }
     } else {
-      if (flag && *src == '"') par = 1;
-      else if (par && *src == '"' && *(src - 1) != '\\') par = !_is_space(*(src+1));
+      if (!par && flag && *src == '"') par = 1;
+      else if (par && *src == '"' && *(src-1) != '\\') par = !_is_s_space(*(src+1));
       if (*src == ',' || *src == ':') flag = 1;
       else flag = 0;
       size += (*src == ':') ? 2 : 1;
@@ -86,10 +94,10 @@ static void _clear_ws(char **data) {
       if (par) { flag = 1; *dest++ = *src; }
       else if (!flag) { flag = 1; *dest++ = ' '; }
     } else {
-      if (flag && *src == '"') par = 1;
-      else if (par && *src == '"' && *(src-1) != '\\') par = !_is_space(*(src+1));
+      if (!par && flag && *src == '"') par = 1;
+      else if (par && *src == '"' && *(src-1) != '\\') par = !_is_s_space(*(src+1));
       if (*src != ',' || par) *dest++ = *src;
-      if ((*src == ',' && !par) || *src == ':') { flag = 1; *dest++ = ' '; }
+      if ((!par && *src == ',') || *src == ':') { flag = 1; *dest++ = ' '; }
       else flag = 0;
     } 
   }
@@ -189,10 +197,10 @@ static l_list *_pp_format(const char *o_data, const char *name) {
     ll_append(r_line, (void*) ++f_line);
     while(line->data) {
       char *word = ll_shift(line);
-      if (_s_with(word, '\"')) {
-	size_t total_len = strlen(word) - 1;
+      if (_s_with(word, '"')) {
+	size_t total_len = strlen(word);
 	char *result = emalloc(total_len + 1);
-	strcpy(result, word + 1);
+	strcpy(result, word);
 	free(word);
 
 	while (1) {
@@ -200,25 +208,18 @@ static l_list *_pp_format(const char *o_data, const char *name) {
 	  word = ll_shift(line);
 
 	  size_t word_len = strlen(word);
-	  if (_e_with(word, '\"')) {
-	    char *new_result = emalloc(total_len + word_len + 1);
-	    memcpy(new_result, result, total_len);
-	    memcpy(new_result + total_len + 1, word, word_len - 1);
-	    new_result[total_len + word_len] = '\0';
-	    new_result[total_len] = ' ';
-	    free(result);
+	  char *new_result = emalloc(total_len + word_len + 2);
+	  memcpy(new_result, result, total_len);
+	  memcpy(new_result + total_len + 1, word, word_len);
+	  new_result[total_len + word_len + 1] = '\0';
+	  new_result[total_len] = ' ';
+	  free(result);
+	  result = new_result;
+	  if (_e_with(word, '"')) {
 	    free(word);
-	    result = new_result;
 	    break;
 	  } else {
-	    char *new_result = emalloc(total_len + word_len + 2);
-	    memcpy(new_result, result, total_len);
-	    memcpy(new_result + total_len + 1, word, word_len);
-	    new_result[total_len + word_len + 1] = '\0';
-	    new_result[total_len] = ' ';
-	    free(result);
 	    free(word);
-	    result = new_result;
 	    total_len += word_len + 1;
 	  }
 	}
@@ -249,7 +250,7 @@ static l_list *_pp_format(const char *o_data, const char *name) {
   ll_free(data);
   return result;
 }
-const char *_pp_macro_sub(l_list *line, l_list *o_sl_data, l_list *files) { //0-skip, err
+static const char *_pp_macro_sub(l_list *line, l_list *o_sl_data, l_list *files) { //0-skip, err
   l_list *sl_data = ll_make();
   l_list *o_operands = ll_shift(o_sl_data), *operands = ll_make();
 
@@ -283,7 +284,7 @@ const char *_pp_macro_sub(l_list *line, l_list *o_sl_data, l_list *files) { //0-
   //TODO currently label on macros is ignored, maybe put it to a new line
   return 0;
 }
-const char *_pp_parse_set(l_list *line, l_list *result, l_list *history, hashset *symbols) { //01-fskip, err
+static const char *_pp_parse_set(l_list *line, l_list *result, l_list *history, hashset *symbols) { //01-fskip, err
   if (line->size != 2) return ".set/.equ/.equiv require 2 operands";
   if (!history->data) {
     if (!hs_contains(symbols, line->data->value))
@@ -291,20 +292,20 @@ const char *_pp_parse_set(l_list *line, l_list *result, l_list *history, hashset
   }
   return (char*) (size_t) (history->data && !strcmp(history->data->value, "i0"));
 }
-const char *_pp_parse_err(l_list *line, l_list *result, l_list *history) { //0, err
+static const char *_pp_parse_err(l_list *line, l_list *result, l_list *history) { //0, err
   if (line->size < 1) return ".err requires label";
   if (!history->data)
     return ll_shift(line);
   return 0;
 }
-const char *_pp_parse_include(l_list *line, l_list *result, l_list *history, cmpl_env *env, l_list *files) { //0, 1-skip, err
+static const char *_pp_parse_include(l_list *line, l_list *result, l_list *history, cmpl_env *env, l_list *files) { //0, 1-skip, err
   if (line->size != 1) return ".include requires 1 operand";
   if (history->data) return 0;
   l_list *sl_data = _pp_format(env->get_file(line->data->value), line->data->value);
   SIDELOAD(sl_data);
   return (void*) 1;
 }
-const char *_pp_parse_macro(l_list *line, l_list *result, l_list *history) { //0, err
+static const char *_pp_parse_macro(l_list *line, l_list *result, l_list *history) { //0, err
   if (line->size < 1) return ".macro requires label";
   if (history->data) return 0;
   ll_append(result, ll_shift(line));
@@ -313,7 +314,7 @@ const char *_pp_parse_macro(l_list *line, l_list *result, l_list *history) { //0
   ll_append(result, operands);
   return 0;
 }
-const char *_pp_parse_endm(l_list *line, l_list **result, l_list *history, hashmap *macros) { //0, err
+static const char *_pp_parse_endm(l_list *line, l_list **result, l_list *history, hashmap *macros) { //0, err
   if (line->size != 0) return ".endm requires no operands";
   if (!history->data) return ".endm requires .macro";
   ll_shift(history);
@@ -323,7 +324,7 @@ const char *_pp_parse_endm(l_list *line, l_list **result, l_list *history, hashm
   *result = ll_make();
   return 0;
 }
-const char *_pp_parse_irp(l_list *line, l_list *result, l_list *history) { //0, err
+static const char *_pp_parse_irp(l_list *line, l_list *result, l_list *history) { //0, err
   if (line->size < 1) return ".irp requires label";
   if (history->data) return 0;
   ll_append(result, ll_shift(line));
@@ -332,14 +333,14 @@ const char *_pp_parse_irp(l_list *line, l_list *result, l_list *history) { //0, 
   ll_append(result, operands);
   return 0;
 }
-const char *_pp_parse_irpc(l_list *line, l_list *result, l_list *history) { //0, err
+static const char *_pp_parse_irpc(l_list *line, l_list *result, l_list *history) { //0, err
   if (line->size != 2) return ".irpc requires 2 operands";
   if (history->data) return 0;
   ll_append(result, ll_shift(line));
   ll_append(result, ll_shift(line));
   return 0;
 }
-const char *_pp_parse_endr(l_list *line, l_list **result, l_list *history, l_list *files) { //0, 1-skip, err
+static const char *_pp_parse_endr(l_list *line, l_list **result, l_list *history, l_list *files) { //0, 1-skip, err
   if (line->size != 0) return ".endr requires no operands";
   if (!history->data) return ".endr requires .irp or .irpc";
   const char *type = ll_shift(history);
@@ -367,7 +368,7 @@ const char *_pp_parse_endr(l_list *line, l_list **result, l_list *history, l_lis
   *result = ll_make();
   return (void*) 1;
 }
-const char *_pp_parse_ifdef(l_list *line, l_list *result, l_list *history, hashset *symbols) { //0, err
+static const char *_pp_parse_ifdef(l_list *line, l_list *result, l_list *history, hashset *symbols) { //0, err
   if (line->size != 1) return ".ifdef requires 1 operand";
   if (!history->data) {
     if (hs_contains(symbols, line->data->value)) ll_prepend(history, "i1");  
@@ -378,7 +379,7 @@ const char *_pp_parse_ifdef(l_list *line, l_list *result, l_list *history, hashs
   }
   return 0;
 }
-const char *_pp_parse_ifndef(l_list *line, l_list *result, l_list *history, hashset *symbols) { //0, err
+static const char *_pp_parse_ifndef(l_list *line, l_list *result, l_list *history, hashset *symbols) { //0, err
   if (line->size != 1) return ".ifndef requires 1 operand";
   if (!history->data) {
     if (hs_contains(symbols, line->data->value)) ll_prepend(history, "i0");  
@@ -389,15 +390,15 @@ const char *_pp_parse_ifndef(l_list *line, l_list *result, l_list *history, hash
   }
   return 0;
 }
-const char *_pp_parse_else(l_list *line, l_list *result, l_list *history) { //01-fskip, err
+static const char *_pp_parse_else(l_list *line, l_list *result, l_list *history) { //01-fskip, err
   if (line->size != 0) return ".else requires no operands";
-  if (!history->data) return ".else requires .ifdef or .ifndef";
+  if (!history->size) return ".else requires .ifdef or .ifndef";
   if (history->size > 1) return 0;
   if (!strcmp(history->data->value, "i0")) history->data->value = "i1";
   else if (!strcmp(history->data->value, "i1")) history->data->value = "i0";
   return (void*) 1;
 }
-const char *_pp_parse_endif(l_list *line, l_list **result, l_list *history, l_list *files) { //0, 1-skip, err
+static const char *_pp_parse_endif(l_list *line, l_list **result, l_list *history, l_list *files) { //0, 1-skip, err
   if (line->size != 0) return ".endif requires no operands";
   if (!history->data) return ".endif requires .ifdef or .ifndef";
   ll_shift(history);
@@ -407,7 +408,8 @@ const char *_pp_parse_endif(l_list *line, l_list **result, l_list *history, l_li
   return (void*) 1;
 }
 
-void _cl_parse_int(l_list *line, l_list *section, size_t size) {
+//TODO add expressions
+static void _cl_parse_int(l_list *line, l_list *section, size_t size) {
   if (line->size > 0) {
     int8_t *o_mem = emalloc(line->size*size);
     l_list *mem = ll_make();
@@ -424,7 +426,7 @@ void _cl_parse_int(l_list *line, l_list *section, size_t size) {
     }
   }
 }
-void _cl_parse_float(l_list *line, l_list *section) {
+static void _cl_parse_float(l_list *line, l_list *section) {
   if (line->size > 0) {
     float *o_mem = emalloc(line->size*4);
     l_list *mem = ll_make();
@@ -440,7 +442,7 @@ void _cl_parse_float(l_list *line, l_list *section) {
     }
   }
 }
-void _cl_parse_double(l_list *line, l_list *section) {
+static void _cl_parse_double(l_list *line, l_list *section) {
   if (line->size > 0) {
     double *o_mem = emalloc(line->size*8);
     l_list *mem = ll_make();
@@ -456,11 +458,11 @@ void _cl_parse_double(l_list *line, l_list *section) {
     }
   }
 }
-void _cl_parse_ascii(l_list *line, l_list *section) {
+static void _cl_parse_ascii(l_list *line, l_list *section) {
   if (line->size > 0) {
     size_t calc_size = 0;
     for (struct _le *entry = line->data; entry; entry = entry->next)
-      calc_size += strlen(entry->value);
+      calc_size += strlen(entry->value) - 2;
     char *o_mem = emalloc(calc_size);
     l_list *mem = ll_make();
     ADDR_ADD(calc_size);
@@ -469,18 +471,18 @@ void _cl_parse_ascii(l_list *line, l_list *section) {
     ll_append(mem, o_mem);
     while (line->data) {
       char *operand = ll_shift(line);
-      size_t loc_size = strlen(operand);
-      memcpy(o_mem, operand, loc_size);
+      size_t loc_size = strlen(operand) - 2;
+      memcpy(o_mem, operand+1, loc_size);
       o_mem += loc_size;
       free(operand);
     }
   }
 }
-void _cl_parse_asciz(l_list *line, l_list *section) {
+static void _cl_parse_asciz(l_list *line, l_list *section) {
   if (line->size > 0) {
     size_t calc_size = 0;
     for (struct _le *entry = line->data; entry; entry = entry->next)
-      calc_size += strlen(entry->value) + 1;
+      calc_size += strlen(entry->value) - 1;
     char *o_mem = emalloc(calc_size);
     l_list *mem = ll_make();
     ADDR_ADD(calc_size);
@@ -489,14 +491,15 @@ void _cl_parse_asciz(l_list *line, l_list *section) {
     ll_append(mem, o_mem);
     while (line->data) {
       char *operand = ll_shift(line);
-      size_t loc_size = strlen(operand) + 1;
-      memcpy(o_mem, operand, loc_size);
+      size_t loc_size = strlen(operand) - 2;
+      memcpy(o_mem, operand+1, loc_size);
+      o_mem[loc_size] = '\0';
       o_mem += loc_size;
       free(operand);
     }
   }
 }
-const char *_cl_parse_skip(l_list *line, l_list *section) {
+static const char *_cl_parse_skip(l_list *line, l_list *section) {
   if (line->size > 2 || line->size < 1) return ".space/.skip requires 2 or 1 operands";
   char *o_size = ll_shift(line);
   size_t size = strtol(o_size, 0, 0), val = 0;
@@ -516,7 +519,7 @@ const char *_cl_parse_skip(l_list *line, l_list *section) {
   memset(o_mem, (int8_t)val, size);
   return 0;
 }
-const char *_cl_parse_fill(l_list *line, l_list *section) {
+static const char *_cl_parse_fill(l_list *line, l_list *section) {
   if (line->size > 3 || line->size < 1) return ".fill requires between 3 and 1 operands";
   char *o_repeat = ll_shift(line);
   size_t repeat = strtol(o_repeat, 0, 0), size = 1, val = 0;
@@ -545,7 +548,7 @@ const char *_cl_parse_fill(l_list *line, l_list *section) {
   }
   return 0;
 }
-const char *_cl_parse_align(l_list *line, l_list *section) {
+static const char *_cl_parse_align(l_list *line, l_list *section) {
   //TODO .balign and .p2align
   if (line->size > 3 || line->size < 1) return ".align requires between 3 and 1 operands";
   char *o_align = ll_shift(line);
@@ -575,7 +578,7 @@ const char *_cl_parse_align(l_list *line, l_list *section) {
   }
   return 0;
 }
-const char *_cl_parse_org(l_list *line, l_list *section) {
+static const char *_cl_parse_org(l_list *line, l_list *section) {
   if (line->size > 2 || line->size < 1) return ".org requires 2 or 1 operands";
   char *o_until = ll_shift(line);
   size_t until = strtol(o_until, 0, 0), val = 0;
@@ -599,14 +602,14 @@ const char *_cl_parse_org(l_list *line, l_list *section) {
   }
   return 0;
 }
-const char *_cl_parse_equ(l_list *line, l_list *section, hashmap *equs) {
+static const char *_cl_parse_equ(l_list *line, l_list *section, hashmap *equs) {
   if (line->size != 2) return ".set/.equ requires 2 operands";
   char *name = ll_shift(line);
   char *value = ll_shift(line);
   long long int true_value = strtoll(value, 0, 0);
   l_list *r_value = ll_make();
   ll_append(r_value, (void*) true_value);
-  ll_append(r_value, ".rodata");
+  ll_append(r_value, ".absolute");
   l_list *old = hm_put(equs, name, r_value);
   if (old) {
     ll_free(old);
@@ -615,7 +618,7 @@ const char *_cl_parse_equ(l_list *line, l_list *section, hashmap *equs) {
   free(value);
   return 0;
 }
-const char *_cl_parse_equiv(l_list *line, l_list *section, hashmap *equs) {
+static const char *_cl_parse_equiv(l_list *line, l_list *section, hashmap *equs) {
   if (line->size != 2) return ".equiv requires 2 operands";
   char *name = ll_shift(line);
   char *value = ll_shift(line);
@@ -629,7 +632,7 @@ const char *_cl_parse_equiv(l_list *line, l_list *section, hashmap *equs) {
   free(value);
   return 0;
 }
-void _cl_parse_section(hashmap *sections, char *name, l_list **section, char **s_name) {
+static void _cl_parse_section(hashmap *sections, char *name, l_list **section, char **s_name) {
   if (hm_contains(sections, name)) {
     *s_name = (char*) hm_get(sections, name)->str;
     *section = hm_get(sections, name)->value;
@@ -645,9 +648,9 @@ void _cl_parse_section(hashmap *sections, char *name, l_list **section, char **s
   }
 }
 
-uint8_t parse_register(char *word) {
+static uint8_t _cl_parse_register(char *word) {
   uint8_t product = 0;
-  if (_s_with(word, '[') && _e_with(word, ']')) {
+  if (_s_with(word, '(') && _e_with(word, ')')) {
     product |= 0x20; //Is pointer
     word[strlen(word) - 1] = 0;
     word++;
@@ -680,14 +683,36 @@ uint8_t parse_register(char *word) {
 
   return product;
 }
-uint16_t parse_immediate(char *word) {
-  return strtol(word, 0, 0);
+static uint32_t _cl_parse_immediate(char *word, l_list *section, size_t offset, size_t size) {
+  if (_s_with(word, '$')) {
+    if (word[1] >= '0' && word[1] <= '9') 
+      return strtol(word+1, 0, 0);
+    l_list *symbol_sub = ll_make();
+    size_t len = strlen(word);
+    char *name = emalloc(len);
+    strcpy(name, word+1);
+    ll_append(symbol_sub, ((uint8_t*)section->data->value) + offset);
+    ll_append(symbol_sub, name);
+    ll_append(symbol_sub, (void*)size);
+    ll_append(section->data->next->next->value, symbol_sub);
+    return 0;
+  } else {
+    return 0;
+  }
+}
+static uint8_t _cl_parse_type(char *word) {
+  if (strlen(word) < 2) return T_ILLEGAL;
+  if (_s_with(word, '$'))
+    return T_LITERAL;
+  else if ((word[0] == '(' && word[1] == '%') || word[0] == '%')
+    return T_REGISTER;
+  return T_ILLEGAL;
 }
 
-const char *_cl_parsei_2reg(l_list *line, l_list *section, int opcode) {
+static const char *_cl_parsei_2reg(l_list *line, l_list *section, int opcode) {
   if (line->size != 2) return "Needs 2 operands"; //TODO descriptive error 
   char *r1_raw = ll_shift(line), *r2_raw = ll_shift(line);
-  uint8_t r1 = parse_register(r1_raw), r2 = parse_register(r2_raw);
+  uint8_t r1 = _cl_parse_register(r1_raw), r2 = _cl_parse_register(r2_raw);
   if (r1 == 0xFF || r2 == 0xFF) return "Operands not valid";
   if (r1 & 0x20 && r2 & 0x20) return "Both operands cannot be pointers";
   if ((r1 & 0x40) ^ (r2 & 0x40)) return "Operands sizes must match";
@@ -697,15 +722,15 @@ const char *_cl_parsei_2reg(l_list *line, l_list *section, int opcode) {
   ll_append(section, mem);
   ll_append(mem, (void*) 3);
   ll_append(mem, o_mem);
-  o_mem[0] = opcode; o_mem[1] = r1 | ((r2 & 0x20) >> 1); o_mem[2] = r2;
+  o_mem[0] = opcode; o_mem[1] = r2 | ((r1 & 0x20) >> 1); o_mem[2] = r1;
   free(r1_raw);
   free(r2_raw);
   return 0;
 }
-const char *_cl_parsei_1reg(l_list *line, l_list *section, int opcode) {
+static const char *_cl_parsei_1reg(l_list *line, l_list *section, int opcode) {
   if (line->size != 1) return "Needs 1 operand"; //TODO descriptive error 
   char *r1_raw = ll_shift(line);
-  uint8_t r1 = parse_register(r1_raw);
+  uint8_t r1 = _cl_parse_register(r1_raw);
   if (r1 == 0xFF) return "Operand not valid";
   uint8_t *o_mem = emalloc(2);
   l_list *mem = ll_make();
@@ -717,10 +742,11 @@ const char *_cl_parsei_1reg(l_list *line, l_list *section, int opcode) {
   free(r1_raw);
   return 0;
 }
-const char *_cl_parsei_1imm(l_list *line, l_list *section, int opcode) {
+static const char *_cl_parsei_1imm(l_list *line, l_list *section, int opcode) {
   if (line->size != 1) return "Needs 1 operand"; //TODO descriptive error 
   char *r1_raw = ll_shift(line);
-  uint16_t r1 = parse_immediate(r1_raw);
+  if (_cl_parse_type(r1_raw) != T_LITERAL) return "Operand not valid";
+  uint32_t r1 = _cl_parse_immediate(r1_raw, section, 1, 2);
   uint8_t *o_mem = emalloc(3);
   l_list *mem = ll_make();
   ADDR_ADD(3);
@@ -731,22 +757,24 @@ const char *_cl_parsei_1imm(l_list *line, l_list *section, int opcode) {
   free(r1_raw);
   return 0;
 }
-const char *_cl_parsei_2reg_imm(l_list *line, l_list *section, int opcode, int alt_opcode) {
+static const char *_cl_parsei_2reg_imm(l_list *line, l_list *section, int opcode, int alt_opcode) {
   if (line->size != 2) return "Needs 2 operands"; //TODO descriptive error 
   char *r1_raw = ll_shift(line), *r2_raw = ll_shift(line);
-  uint16_t r1 = parse_register(r1_raw), r2 = parse_register(r2_raw);
-  if (r1 == 0xFF) return "Operand not valid";
-  if (r2 == 0xFF) {
-    if (r1 & 0x40) return "Cannot use Extended on 1reg-1imm";
-    r2 = parse_immediate(r2_raw);
+  uint8_t r_type = _cl_parse_type(r1_raw);
+  uint8_t r2 = _cl_parse_register(r2_raw);
+  if (r2 == 0xFF) return "Operand not valid";
+  if (r_type == T_LITERAL) {
+    uint32_t imm1 = _cl_parse_immediate(r1_raw, section, 2, 2);
+    if (r2 & 0x40) return "Cannot use Extended on 1reg-1imm";
     uint8_t *o_mem = emalloc(4);
     l_list *mem = ll_make();
     ADDR_ADD(4);
     ll_append(section, mem);
     ll_append(mem, (void*) 4);
     ll_append(mem, o_mem);
-    o_mem[0] = alt_opcode; o_mem[1] = r1; ((uint16_t*)o_mem)[1] = r2;
-  } else {
+    o_mem[0] = alt_opcode; o_mem[1] = r2; ((uint16_t*)o_mem)[1] = imm1;
+  } else if (r_type == T_REGISTER) {
+    uint8_t r1 = _cl_parse_register(r1_raw);
     if (r1 & 0x20 && r2 & 0x20) return "Both operands cannot be pointers";
     if ((r1 & 0x40) ^ (r2 & 0x40)) return "Operands sizes must match";
     uint8_t *o_mem = emalloc(3);
@@ -755,18 +783,18 @@ const char *_cl_parsei_2reg_imm(l_list *line, l_list *section, int opcode, int a
     ll_append(section, mem);
     ll_append(mem, (void*) 3);
     ll_append(mem, o_mem);
-    o_mem[0] = opcode; o_mem[1] = r1 | ((r2 & 0x20) >> 1); o_mem[2] = r2;
-  }
+    o_mem[0] = opcode; o_mem[1] = r2 | ((r1 & 0x20) >> 1); o_mem[2] = r1;
+  } else return "Operand not valid";
   free(r1_raw);
   free(r2_raw);
   return 0;
 }
-const char *_cl_parsei_1reg_imm(l_list *line, l_list *section, int opcode, int alt_opcode) {
+static const char *_cl_parsei_1reg_imm(l_list *line, l_list *section, int opcode, int alt_opcode) {
   if (line->size != 1) return "Needs 1 operand"; //TODO descriptive error 
   char *r1_raw = ll_shift(line);
-  uint16_t r1 = parse_register(r1_raw);
-  if (r1 == 0xFF) {
-    r1 = parse_immediate(r1_raw);
+  uint8_t r_type = _cl_parse_type(r1_raw);
+  if (r_type == T_LITERAL) {
+    uint32_t r1 = _cl_parse_immediate(r1_raw, section, 1, 2);
     uint8_t *o_mem = emalloc(3);
     l_list *mem = ll_make();
     ADDR_ADD(3);
@@ -774,7 +802,8 @@ const char *_cl_parsei_1reg_imm(l_list *line, l_list *section, int opcode, int a
     ll_append(mem, (void*) 3);
     ll_append(mem, o_mem);
     o_mem[0] = alt_opcode; *((uint16_t*)o_mem + 1) = r1;
-  } else {
+  } else if (r_type == T_REGISTER) {
+    uint8_t r1 = _cl_parse_register(r1_raw);
     uint8_t *o_mem = emalloc(2);
     l_list *mem = ll_make();
     ADDR_ADD(2);
@@ -782,33 +811,62 @@ const char *_cl_parsei_1reg_imm(l_list *line, l_list *section, int opcode, int a
     ll_append(mem, (void*) 2);
     ll_append(mem, o_mem);
     o_mem[0] = opcode; o_mem[1] = r1;
-  }
+  } else return "Operand not valid";
   free(r1_raw);
   return 0;
 }
-const char *_cl_parsei_1reg_1imm(l_list *line, l_list *section, int opcode) {
+static const char *_cl_parsei_1reg_1imm(l_list *line, l_list *section, int opcode) {
   if (line->size != 2) return "Needs 2 operands"; //TODO descriptive error 
   char *r1_raw = ll_shift(line), *r2_raw = ll_shift(line);
-  uint16_t r1 = parse_register(r1_raw), r2 = parse_immediate(r2_raw);
-  if (r1 == 0xFF) return "Operand not valid";
+  if (_cl_parse_type(r1_raw) != T_LITERAL) return "Operands not valid";
+  uint8_t r2 = _cl_parse_register(r2_raw);
+  if (r2 == 0xFF) return "Operands not valid";
+  uint32_t imm1 = _cl_parse_immediate(r1_raw, section, 2, 1);
   uint8_t *o_mem = emalloc(3);
   l_list *mem = ll_make();
-  ADDR_ADD(3);
+  ADDR_ADD(4);
   ll_append(section, mem);
   ll_append(mem, (void*) 3);
   ll_append(mem, o_mem);
-  o_mem[0] = opcode; o_mem[1] = r1; o_mem[2] = r2;
+  o_mem[0] = opcode; o_mem[1] = r2; o_mem[2] = imm1;
   free(r1_raw);
   free(r2_raw);
   return 0;
 }
-const char *_cl_parsei_jcc(l_list *line, l_list *section) {
-
+static const char *_cl_parsei_jcc(l_list *line, l_list *section, int opcode, int condition) {
+  if (line->size != 1) return "Needs a label"; //TODO descriptive error 
+  char *r1_raw = ll_shift(line);
+  if (_cl_parse_type(r1_raw) != T_LITERAL) return "Operand not valid";
+  uint32_t r1 = _cl_parse_immediate(r1_raw, section, 2, 2);
+  uint8_t *o_mem = emalloc(4);
+  l_list *mem = ll_make();
+  ADDR_ADD(4);
+  ll_append(section, mem);
+  ll_append(mem, (void*) 4);
+  ll_append(mem, o_mem);
+  o_mem[0] = opcode; o_mem[1] = condition; ((uint16_t*)o_mem)[1] = r1;
+  free(r1_raw);
+  return 0;
 }
-const char *_cl_parsei_movcc(l_list *line, l_list *section) {
-
+static const char *_cl_parsei_movcc(l_list *line, l_list *section, int opcode, int condition) {
+  if (line->size != 2) return "Needs 2 operands"; //TODO descriptive error 
+  char *r1_raw = ll_shift(line), *r2_raw = ll_shift(line);
+  uint8_t r1 = _cl_parse_register(r1_raw), r2 = _cl_parse_register(r2_raw);
+  if (r1 == 0xFF || r2 == 0xFF) return "Operands not valid";
+  if (r1 & 0x20 && r2 & 0x20) return "Both operands cannot be pointers";
+  if ((r1 & 0x40) ^ (r2 & 0x40)) return "Operands sizes must match";
+  uint8_t *o_mem = emalloc(4);
+  l_list *mem = ll_make();
+  ADDR_ADD(4);
+  ll_append(section, mem);
+  ll_append(mem, (void*) 4);
+  ll_append(mem, o_mem);
+  o_mem[0] = opcode; o_mem[1] = condition; o_mem[2] = r2 | ((r1 & 0x20) >> 1); o_mem[3] = r1;
+  free(r1_raw);
+  free(r2_raw);
+  return 0;
 }
-const char *_cl_parsei_pure(l_list *line, l_list *section, int opcode) {
+static const char *_cl_parsei_pure(l_list *line, l_list *section, int opcode) {
   if (line->size != 0) return "Needs no operands"; //TODO descriptive error 
   uint8_t *o_mem = emalloc(1);
   l_list *mem = ll_make();
@@ -821,11 +879,7 @@ const char *_cl_parsei_pure(l_list *line, l_list *section, int opcode) {
 }
 
 //TODO not related but important: fix hashmap erasing/adding/listing
-//.macro .irp .irpc .ifdef .include .err PPT
-//.byte .short .int .long .single/.float .double .ascii .asciz CT
-//.space/.skip .fill .align .org .code16 .code32 CT
-//.set/.equ .equiv CT
-//.section (.data .text expl) .comm .lcomm .globl LT
+//TODO .comm .lcomm .globl LT
 
 //Signature convention:
 // literal 	= ["*"] , ("word" | "f_line")
@@ -840,7 +894,7 @@ const char *_cl_parsei_pure(l_list *line, l_list *section, int opcode) {
 l_list *preprocess(const char *orig, cmpl_env *env) {
  
   //Signatures:
-  hashmap *macros = hm_make(); 			// #*macros[operands[*f_line], *f_line]
+  hashmap *macros = hm_make(); 			// #*macros[operands[*f_line...], *f_line...]]
   hashset *symbols = hs_make(), 		// %symbols[word]
 	  *orphan_symbols = hs_make(); 		// %orphan_symbols[*word]
   l_list *files = ll_make(), 			// files[file[*f_line...]...]
@@ -947,7 +1001,7 @@ skip:
 	    if (history->data && ((char*)history->data->value)[0] != 'i') goto dcwa;
 	    const char *result = _pp_parse_else(line, dl_result, history);
 	    if (result > (const char*) 1) ERR(result);
-	    full_skip = (size_t) result;
+	    full_skip = history->size == 1 || !strcmp(history->data->value, "i0");
 
 	  } else if (!strcmp(opcode, ".endif")) {
 	    if (history->data && ((char*)history->data->value)[0] != 'i') goto dcwa;
@@ -1006,19 +1060,29 @@ dcwa:
     ll_shift(files);
     ll_free(file);
   }
-  //FIXME memory leak in "macros": "operands[*f_line]" not freed correctly 
-  hm_free_val(macros);
-  hs_free(symbols);
-  hs_free_val(orphan_symbols);
-  ll_free(files);
-  ll_free_val(dl_result);
-  ll_free(history);
+  
+  {
+    l_list *s_macros = hm_free_to(macros);
+    while (s_macros->data) {
+      l_list *macro = ll_shift(s_macros);
+      free(ll_shift(macro));
+      l_list *data = ll_shift(macro);
+      ll_free_val(ll_shift(data));
+      ll_free_val(data);
+      ll_free_val(macro);
+    }
+    hs_free(symbols);
+    hs_free_val(orphan_symbols);
+    ll_free(files);
+    ll_free_val(dl_result);
+    ll_free(history);
+  }
   return result;
 }
 
-//Signature (data[*f_line...])==>data[#*symbol[address, section], sections[unwrap$[*name, section[size, symbol[address, *name, 32-bit]..., *bytecode]]...]]
+//Signature (data[*f_line...])==>data[#*symbol[address, section], sections[unwrap$[*name, section[size, symbol[address, *name, size]..., *bytecode]]...]]
 l_list *compile(l_list *data, cmpl_env *env) {
-  //Signature result[#*symbol[address, section], #*section[address, 32-bit, symbol[address, *name, 32-bit]..., *raw_code...]]
+  //Signature result[#*symbol[address, section], #*section[address, 32-bit, symbol[address, *name, size]..., *raw_code...]]
   l_list *result = ll_make(), *section;
   char *s_name;
   {
@@ -1223,11 +1287,113 @@ l_list *compile(l_list *data, cmpl_env *env) {
 	} else if (!strcmp(opcode, "rcall")) {
 	  const char *err = _cl_parsei_1reg_imm(line, section, I_RCALL, I_RCALLI);
 	  if (err) ERR(err);
-	} else if (!strcmp(opcode, "jc")) { //TODO add most common
-	  const char *err = _cl_parsei_jcc(line, section);
+	} else if (!strcmp(opcode, "jae")) {
+	  const char *err = _cl_parsei_jcc(line, section, I_JNC, 0x80);
 	  if (err) ERR(err);
-	} else if (!strcmp(opcode, "movc")) { //TODO add most common
-	  const char *err = _cl_parsei_movcc(line, section);
+	} else if (!strcmp(opcode, "jnae")) {
+	  const char *err = _cl_parsei_jcc(line, section, I_JC, 0x80);
+	  if (err) ERR(err);
+	} else if (!strcmp(opcode, "jb")) {
+	  const char *err = _cl_parsei_jcc(line, section, I_JC, 0x80);
+	  if (err) ERR(err);
+	} else if (!strcmp(opcode, "jnb")) {
+	  const char *err = _cl_parsei_jcc(line, section, I_JNC, 0x80);
+	  if (err) ERR(err);
+	} else if (!strcmp(opcode, "je")) {
+	  const char *err = _cl_parsei_jcc(line, section, I_JC, 0x82);
+	  if (err) ERR(err);
+	} else if (!strcmp(opcode, "jne")) {
+	  const char *err = _cl_parsei_jcc(line, section, I_JNC, 0x82);
+	  if (err) ERR(err);
+	} else if (!strcmp(opcode, "jge")) {
+	  const char *err = _cl_parsei_jcc(line, section, I_JC, 0x31);
+	  if (err) ERR(err);
+	} else if (!strcmp(opcode, "jnge")) {
+	  const char *err = _cl_parsei_jcc(line, section, I_JNC, 0x31);
+	  if (err) ERR(err);
+	} else if (!strcmp(opcode, "jl")) {
+	  const char *err = _cl_parsei_jcc(line, section, I_JNC, 0x31);
+	  if (err) ERR(err);
+	} else if (!strcmp(opcode, "jnl")) {
+	  const char *err = _cl_parsei_jcc(line, section, I_JC, 0x31);
+	  if (err) ERR(err);
+	} else if (!strcmp(opcode, "jc")) {
+	  const char *err = _cl_parsei_jcc(line, section, I_JC, 0x80);
+	  if (err) ERR(err);
+	} else if (!strcmp(opcode, "jnc")) {
+	  const char *err = _cl_parsei_jcc(line, section, I_JNC, 0x80);
+	  if (err) ERR(err);
+	} else if (!strcmp(opcode, "jo")) {
+	  const char *err = _cl_parsei_jcc(line, section, I_JC, 0x81);
+	  if (err) ERR(err);
+	} else if (!strcmp(opcode, "jno")) {
+	  const char *err = _cl_parsei_jcc(line, section, I_JNC, 0x81);
+	  if (err) ERR(err);
+	} else if (!strcmp(opcode, "js")) {
+	  const char *err = _cl_parsei_jcc(line, section, I_JC, 0x83);
+	  if (err) ERR(err);
+	} else if (!strcmp(opcode, "jns")) {
+	  const char *err = _cl_parsei_jcc(line, section, I_JNC, 0x83);
+	  if (err) ERR(err);
+	} else if (!strcmp(opcode, "jz")) {
+	  const char *err = _cl_parsei_jcc(line, section, I_JC, 0x82);
+	  if (err) ERR(err);
+	} else if (!strcmp(opcode, "jnz")) {
+	  const char *err = _cl_parsei_jcc(line, section, I_JNC, 0x82);
+	  if (err) ERR(err);
+	} else if (!strcmp(opcode, "movae")) {
+	  const char *err = _cl_parsei_movcc(line, section, I_MOVNC, 0x80);
+	  if (err) ERR(err);
+	} else if (!strcmp(opcode, "movnae")) {
+	  const char *err = _cl_parsei_movcc(line, section, I_MOVC, 0x80);
+	  if (err) ERR(err);
+	} else if (!strcmp(opcode, "movb")) {
+	  const char *err = _cl_parsei_movcc(line, section, I_MOVC, 0x80);
+	  if (err) ERR(err);
+	} else if (!strcmp(opcode, "movnb")) {
+	  const char *err = _cl_parsei_movcc(line, section, I_MOVNC, 0x80);
+	  if (err) ERR(err);
+	} else if (!strcmp(opcode, "move")) {
+	  const char *err = _cl_parsei_movcc(line, section, I_MOVC, 0x82);
+	  if (err) ERR(err);
+	} else if (!strcmp(opcode, "movne")) {
+	  const char *err = _cl_parsei_movcc(line, section, I_MOVNC, 0x82);
+	  if (err) ERR(err);
+	} else if (!strcmp(opcode, "movge")) {
+	  const char *err = _cl_parsei_movcc(line, section, I_MOVC, 0x31);
+	  if (err) ERR(err);
+	} else if (!strcmp(opcode, "movnge")) {
+	  const char *err = _cl_parsei_movcc(line, section, I_MOVNC, 0x31);
+	  if (err) ERR(err);
+	} else if (!strcmp(opcode, "movl")) {
+	  const char *err = _cl_parsei_movcc(line, section, I_MOVNC, 0x31);
+	  if (err) ERR(err);
+	} else if (!strcmp(opcode, "movnl")) {
+	  const char *err = _cl_parsei_movcc(line, section, I_MOVC, 0x31);
+	  if (err) ERR(err);
+	} else if (!strcmp(opcode, "movc")) {
+	  const char *err = _cl_parsei_movcc(line, section, I_MOVC, 0x80);
+	  if (err) ERR(err);
+	} else if (!strcmp(opcode, "movnc")) {
+	  const char *err = _cl_parsei_movcc(line, section, I_MOVNC, 0x80);
+	  if (err) ERR(err);
+	} else if (!strcmp(opcode, "movo")) {
+	  const char *err = _cl_parsei_movcc(line, section, I_MOVC, 0x81);
+	  if (err) ERR(err);
+	} else if (!strcmp(opcode, "movno")) {
+	  const char *err = _cl_parsei_movcc(line, section, I_MOVNC, 0x81);
+	  if (err) ERR(err);
+	} else if (!strcmp(opcode, "movs")) {
+	  const char *err = _cl_parsei_movcc(line, section, I_MOVC, 0x83);
+	  if (err) ERR(err);
+	} else if (!strcmp(opcode, "movns")) {
+	  const char *err = _cl_parsei_movcc(line, section, I_MOVNC, 0x83);
+	  if (err) ERR(err);
+	} else if (!strcmp(opcode, "movz")) {
+	  const char *err = _cl_parsei_movcc(line, section, I_MOVC, 0x82);
+	  if (err) ERR(err);
+	} else if (!strcmp(opcode, "movnz")) {
+	  const char *err = _cl_parsei_movcc(line, section, I_MOVNC, 0x82);
 	  if (err) ERR(err);
 	} else if (!strcmp(opcode, "ret")) {
 	  const char *err = _cl_parsei_pure(line, section, I_RET);
