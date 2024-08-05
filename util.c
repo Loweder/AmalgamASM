@@ -4,7 +4,7 @@
 
 void *emalloc(size_t size) {
   void *p = malloc(size);
-  if (!p) { perror("Out of memory!"); exit(-1); }
+  if (!p) { perror("Out of memory"); exit(-1); }
   return p;
 }
 
@@ -19,8 +19,8 @@ uint64_t hash(const char *str) {
 }
 
 
-hashset *hs_make(void) {
-  hashset *res = NEW(hashset);
+hashset_t *hs_make(void) {
+  hashset_t *res = NEW(hashset_t);
   res->size = 0;
   res->capacity = 8;
   res->buckets = NEW_A(struct _lke*, 8);
@@ -28,7 +28,7 @@ hashset *hs_make(void) {
   return res;
 }
 
-uint8_t hs_contains(const hashset *set, const char *str) {
+uint8_t hs_contains(const hashset_t *set, const char *str) {
   uint64_t s_hash = hash(str);
   for (const struct _lke *bucket = set->buckets[s_hash % set->capacity]; bucket; bucket = bucket->next) {
     if (bucket->key == s_hash && !strcmp(str, bucket->str)) return 1;
@@ -36,7 +36,7 @@ uint8_t hs_contains(const hashset *set, const char *str) {
   return 0;
 }
 
-void hs_put(hashset *set, const char *str) {
+void hs_put(hashset_t *set, const char *str) {
   uint64_t s_hash = hash(str);
   struct _lke *bucket = NEW(struct _lke);
   bucket->next = set->buckets[s_hash % set->capacity];
@@ -47,7 +47,7 @@ void hs_put(hashset *set, const char *str) {
   if (((double)set->size / (double)set->capacity) > 2) hs_rehash(set);
 }
 
-void hs_erase(hashset *set, const char *str) {
+void hs_erase(hashset_t *set, const char *str) {
   uint64_t s_hash = hash(str);
   for (struct _lke **bucket = &(set->buckets[s_hash % set->capacity]); *bucket; bucket = &((*bucket)->next)) {
     if ((*bucket)->key == s_hash && (*bucket)->str == str) {
@@ -59,7 +59,7 @@ void hs_erase(hashset *set, const char *str) {
   }
 }
 
-void hs_rehash(hashset *set) {
+void hs_rehash(hashset_t *set) {
   size_t new_capacity = (size_t)((double)set->size / 0.75L);
   struct _lke **new_buckets = NEW_A(struct _lke*, new_capacity);
   memset(new_buckets, 0, sizeof(struct _lke*) * new_capacity);
@@ -79,7 +79,8 @@ void hs_rehash(hashset *set) {
   set->capacity = new_capacity;
 }
 
-void hs_free(hashset *set) {
+void hs_free(hashset_t *set) {
+  if (!set) return;
   for (int i = 0; i < set->capacity; i++) {
     struct _lke *bucket = set->buckets[i], *s_bucket;
     while (bucket) {
@@ -92,7 +93,8 @@ void hs_free(hashset *set) {
   free(set);
 }
 
-void hs_free_val(hashset *set) {
+void hs_free_val(hashset_t *set) {
+  if (!set) return;
   for (int i = 0; i < set->capacity; i++) {
     struct _lke *bucket = set->buckets[i], *s_bucket;
     while (bucket) {
@@ -107,8 +109,8 @@ void hs_free_val(hashset *set) {
 }
 
 
-hashmap *hm_make(void) {
-  hashmap *res = NEW(hashmap);
+hashmap_t *hm_make(void) {
+  hashmap_t *res = NEW(hashmap_t);
   res->size = 0;
   res->capacity = 8;
   res->buckets = NEW_A(struct _lkee*, 8);
@@ -116,7 +118,7 @@ hashmap *hm_make(void) {
   return res;
 }
 
-struct _lkee *hm_get(hashmap *map, const char *str) {
+struct _lkee *hm_get(hashmap_t *map, const char *str) {
   uint64_t s_hash = hash(str);
   for (struct _lkee *bucket = map->buckets[s_hash % map->capacity]; bucket; bucket = bucket->next) {
     if (bucket->key == s_hash && !strcmp(str, bucket->str)) return bucket;
@@ -124,12 +126,7 @@ struct _lkee *hm_get(hashmap *map, const char *str) {
   return 0;
 }
 
-uint8_t hm_contains(const hashmap *map, const char *str) {
-  struct _lkee *bucket = hm_get((hashmap*)map, str);
-  return bucket != 0;
-}
-
-void *hm_put(hashmap *map, const char *str, void *value) {
+void *hm_put(hashmap_t *map, const char *str, void *value) {
   struct _lkee *bucket = hm_get(map, str);
   if (bucket) {
     void *old_data = bucket->value;
@@ -149,7 +146,7 @@ void *hm_put(hashmap *map, const char *str, void *value) {
   return 0;
 }
 
-struct _lkee *hm_erase(hashmap *map, const char *str) {
+struct _lkee *hm_erase(hashmap_t *map, const char *str) {
   uint64_t s_hash = hash(str);
   for (struct _lkee **bucket = &(map->buckets[s_hash % map->capacity]); *bucket; bucket = &((*bucket)->next)) {
     if ((*bucket)->key == s_hash && (*bucket)->str == str) {
@@ -162,7 +159,7 @@ struct _lkee *hm_erase(hashmap *map, const char *str) {
   return 0;
 }
 
-void hm_rehash(hashmap *map) {
+void hm_rehash(hashmap_t *map) {
   size_t new_capacity = (size_t)((double)map->size / 0.75L);
   struct _lkee **new_buckets = NEW_A(struct _lkee*, new_capacity);
   memset(new_buckets, 0, sizeof(struct _lkee*) * new_capacity);
@@ -182,7 +179,8 @@ void hm_rehash(hashmap *map) {
   map->capacity = new_capacity;
 }
 
-void hm_free(hashmap *map) {
+void hm_free(hashmap_t *map) {
+  if (!map) return;
   for (int i = 0; i < map->capacity; i++) {
     struct _lkee *bucket = map->buckets[i], *s_bucket;
     while (bucket) {
@@ -195,7 +193,8 @@ void hm_free(hashmap *map) {
   free(map);
 }
 
-void hm_free_val(hashmap *map) {
+void hm_free_val(hashmap_t *map) {
+  if (!map) return;
   for (int i = 0; i < map->capacity; i++) {
     struct _lkee *bucket = map->buckets[i], *s_bucket;
     while (bucket) {
@@ -210,12 +209,13 @@ void hm_free_val(hashmap *map) {
   free(map);
 }
 
-l_list *hm_free_to(hashmap *map) {
-  l_list *result = ll_make();
+llist_t *hm_free_to(hashmap_t *map) {
+  if (!map) return 0;
+  llist_t *result = ll_make();
   for (int i = 0; i < map->capacity; i++) {
     struct _lkee *bucket = map->buckets[i], *s_bucket;
     while (bucket) {
-      l_list *entry = ll_make();
+      llist_t *entry = ll_make();
       ll_append(result, entry);
       s_bucket = bucket;
       bucket = bucket->next;
@@ -230,15 +230,15 @@ l_list *hm_free_to(hashmap *map) {
 }
 
 
-l_list *ll_make(void) {
-  l_list *res = NEW(l_list);
+llist_t *ll_make(void) {
+  llist_t *res = NEW(llist_t);
   res->size = 0;
   res->data = 0;
   res->last = &res->data;
   return res;
 }
 
-void ll_append(l_list *list, void *value) {
+void ll_append(llist_t *list, void *value) {
   *(list->last) = NEW(struct _le);
   (*(list->last))->value = value;
   (*(list->last))->next = 0;
@@ -246,7 +246,7 @@ void ll_append(l_list *list, void *value) {
   list->size++;
 }
 
-void ll_prepend(l_list *list, void *value) {
+void ll_prepend(llist_t *list, void *value) {
   struct _le *data = NEW(struct _le);
   data->value = value;
   data->next = list->data;
@@ -255,7 +255,7 @@ void ll_prepend(l_list *list, void *value) {
   if (*list->last == list->data) list->last = &(data->next);
 }
 
-void *ll_pop(l_list *list) {
+void *ll_pop(llist_t *list) {
   if (!list->size) return 0;
   list->size--;
   for (struct _le **data = &list->data; *data; data = &((*data)->next)) {
@@ -271,7 +271,7 @@ void *ll_pop(l_list *list) {
   return 0;
 }
 
-void *ll_shift(l_list *list) {
+void *ll_shift(llist_t *list) {
   if (!list->size) return 0;
   list->size--;
   if (list->size == 0) list->last = &list->data;
@@ -282,7 +282,8 @@ void *ll_shift(l_list *list) {
   return value;
 }
 
-void ll_free(l_list *list) {
+void ll_free(llist_t *list) {
+  if (!list) return;
   struct _le *entry = list->data, *s_entry; 
   while(entry) {
     s_entry = entry;
@@ -292,7 +293,8 @@ void ll_free(l_list *list) {
   free(list);
 }
 
-void ll_free_val(l_list *list) {
+void ll_free_val(llist_t *list) {
+  if (!list) return;
   struct _le *entry = list->data, *s_entry; 
   while(entry) {
     s_entry = entry;
@@ -301,4 +303,60 @@ void ll_free_val(l_list *list) {
     free(s_entry);
   }
   free(list);
+}
+
+array_t *ll_free_to(llist_t *list) {
+  if (!list) return 0;
+  array_t *result = ar_make(list->size);
+  int i = 0;
+  struct _le *entry = list->data, *s_entry; 
+  while(entry) {
+    ar_set(result, i, entry->value);
+    s_entry = entry;
+    entry = entry->next;
+    free(s_entry);
+    i++;
+  }
+  free(list);
+  return result;
+}
+
+
+array_t *ar_make(size_t size) {
+  array_t *res = NEW(array_t);
+  res->size = size;
+  res->data = NEW_A(void*, size);
+  return res;
+}
+
+void *ar_set(array_t *array, size_t index, void *value) {
+  if (array->size <= index) return 0;
+  void *old = array->data[index];
+  array->data[index] = value;
+  return old;
+}
+
+void *ar_get(array_t *array, size_t index) {
+  if (array->size <= index) return 0;
+  return array->data[index];
+}
+
+const void *ar_cget(const array_t *array, size_t index) {
+  if (array->size <= index) return 0;
+  return array->data[index];
+}
+
+void ar_free(array_t *array) {
+  if (!array) return;
+  free(array->data);
+  free(array);
+}
+
+void ar_free_val(array_t *array) {
+  if (!array) return;
+  for (size_t i = 0; i < array->size; i++) {
+    free(array->data[i]);
+  }
+  free(array->data);
+  free(array);
 }

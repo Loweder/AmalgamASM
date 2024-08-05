@@ -6,11 +6,10 @@
 
 typedef struct {
   const char *(*get_file)(const char *name);
-  char *err;
+  llist_t *errors;
 } cmpl_env;
 
-l_list *preprocess(const char *data, cmpl_env *env);
-l_list *compile(l_list *data, cmpl_env *env);
-char *link(l_list *data, cmpl_env *env);
+llist_t *compile(const char *data, cmpl_env *env);
+char *link(llist_t *data, cmpl_env *env);
 
 #endif

@@ -4,7 +4,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 
-static void _debug_print_line(l_list *line) {
+static void _debug_print_line(llist_t *line) {
   char *file_name = line->data->value;
   size_t line_number = (size_t) line->data->next->value;
 
@@ -15,7 +15,7 @@ static void _debug_print_line(l_list *line) {
   }
   printf("\n");
 }
-static void _debug_print_lines(l_list *lines) { //NOLINT
+static void _debug_print_lines(llist_t *lines) { //NOLINT
   for (struct _le *line = lines->data; line; line = line->next) {
     _debug_print_line(line->value);
   }
@@ -60,22 +60,27 @@ static cmpl_env env = {
 };
 
 int main(void) {
-  env.err = emalloc(100);
-  l_list *product = preprocess("main.s", &env);
-  if (!product) {
-    printf("Preprocess error in %s\n", env.err);
+  env.errors = ll_make();
+  llist_t *product = compile("main.s", &env);
+  if (env.errors->size) {
+    printf("Preprocess errors:\n");
+    E_FOR(entry, env.errors->data) {
+      printf("Error %s\n", (char*) entry->value);
+    }
     return 1;
   }
-  _debug_print_lines(product);
-  l_list *complex = compile(product, &env);
-  if (!complex) {
-    printf("Compiler error in %s\n", env.err);
-    return 1;
+  llist_t *symbols = hm_free_to(ll_shift(product));
+  llist_t *sections = ll_shift(product);
+
+  E_FOR(entry, symbols->data) {
+    llist_t *l_entry = entry->value;
+    llist_t *symbol = l_entry->data->next->value;
+    printf("Symbol '%s'. Section '%s', value '0x%lx'\n", (char*) l_entry->data->value, (char*) symbol->data->value, (size_t) symbol->data->next->value);
   }
-  l_list *sections = complex->data->next->value;
-  for (struct _le *entry = sections->data; entry; entry = entry->next) {
-    printf("Section %s\n", (char*)((l_list*)entry->value)->data->value);
-    l_list *section = ((l_list*)entry->value)->data->next->value;
+
+  E_FOR(entry, sections->data) {
+    printf("Section '%s'\n", (char*)((llist_t*)entry->value)->data->value);
+    llist_t *section = ((llist_t*)entry->value)->data->next->value;
     size_t sect_size = (size_t) ll_shift(section);
     ll_shift(section);
     uint8_t *data = ll_shift(section);
@@ -84,6 +89,7 @@ int main(void) {
       if (!((i+1) % 32)) printf("\n");
     }
   }
+  return 0;
 }
 
 int main_i(void) {
@@ -127,13 +133,14 @@ uint8_t *hw_mem(void) {
 const char *get_file(const char *name) {
   char *full_name = emalloc(256);
   snprintf(full_name, 256, "test/asm/%s", name);
-  FILE *file = fopen(full_name, "r");
+  FILE *file = fopen(full_name, "rb");
   fseek(file, 0L, SEEK_END);
   size_t size = ftell(file);
-  char *data = emalloc(size);
+  char *data = emalloc(size + 1);
   rewind(file);
   fread(data, size, 1, file);
   fclose(file);
+  data[size] = '\0';
   free(full_name);
   return data;
 }
