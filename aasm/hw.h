@@ -28,6 +28,8 @@ typedef enum {
   HWD_OPT_COMPLEX = 0x0001
 } hw_desc_opt;
 
+//TODO add userdata as void*
+// Also do: add disks to IO space, or something like that
 typedef struct {
   uint32_t freq;
   uint32_t p_size;

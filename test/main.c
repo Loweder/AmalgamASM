@@ -55,13 +55,13 @@ static const hw_desc device = {
 
 #define DELIM "------------------------------------------------------------------------------------------------------------------------\n"
 
-static cmpl_env env = {
+static cmpl_env_t env = {
   .get_file = get_file,
 };
 
 int main(void) {
   env.errors = ll_make();
-  llist_t *product = compile("main.s", &env);
+  compiled_t *product = compile("main.s", &env);
   if (env.errors->size) {
     printf("Preprocess errors:\n");
     E_FOR(entry, env.errors->data) {
@@ -69,25 +69,30 @@ int main(void) {
     }
     return 1;
   }
-  llist_t *symbols = hm_free_to(ll_shift(product));
-  llist_t *sections = ll_shift(product);
+  llist_t *symbols = hm_free_to(product->symbols);
+  llist_t *sections = hm_free_to(product->sections);
 
   E_FOR(entry, symbols->data) {
     llist_t *l_entry = entry->value;
-    llist_t *symbol = l_entry->data->next->value;
-    printf("Symbol '%s'. Section '%s', value '0x%lx'\n", (char*) l_entry->data->value, (char*) symbol->data->value, (size_t) symbol->data->next->value);
+    symbol_t *symbol = l_entry->data->next->value;
+    printf("Symbol '%s'. Section '%s', value '0x%lx', global '%d'\n", (char*) l_entry->data->value, symbol->section, symbol->value, symbol->global);
   }
 
   E_FOR(entry, sections->data) {
     printf("Section '%s'\n", (char*)((llist_t*)entry->value)->data->value);
-    llist_t *section = ((llist_t*)entry->value)->data->next->value;
-    size_t sect_size = (size_t) ll_shift(section);
-    ll_shift(section);
-    uint8_t *data = ll_shift(section);
-    for (size_t i = 0; i < sect_size; i++) {
-      printf("%02x ", data[i]);
+    section_t *section = ((llist_t*)entry->value)->data->next->value;
+    for (size_t i = 0; i < section->size; i++) {
+      printf("%02x ", section->data[i]);
       if (!((i+1) % 32)) printf("\n");
     }
+    if (section->size % 32) printf("\n");
+    for (size_t i = 0; i < section->size; i++) {
+      char datum = section->data[i];
+      printf("%c", datum >= 0x20 && datum < 0x7F ? datum : '.');
+      if (!((i+1) % 32)) printf("\n");
+    }
+    if (section->size % 32) printf("\n");
+    printf("\n");
   }
   return 0;
 }

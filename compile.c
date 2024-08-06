@@ -29,19 +29,25 @@ typedef union _expr_t {
   } lit;
 } expr_t;
 typedef struct {
+  char *name;
+  size_t address;  
+  llist_t *expr;
+  llist_t *data;
+  uint8_t bitness;
+} _section_t;
+typedef struct {
   char *file;
   size_t f_line;
   hashmap_t *symbols;
-  llist_t *section;
-  cmpl_env *env;
+  _section_t *section;
+  cmpl_env_t *env;
 } cmpl_t;
 
 static uint8_t _is_space(char datum) {
   return datum == ' ' || datum == '\t' || datum == '\n' || datum == ',' || datum == '\0';
 }
-//TODO maybe remove
 static uint8_t _is_allowed(char datum) {
-  return (datum >= '0' && datum <= '9') || (datum >= 'a' && datum <= 'z') || (datum >= 'A' && datum <= 'z') || datum == '_' || datum == '\\';
+  return (datum >= '0' && datum <= '9') || (datum >= 'a' && datum <= 'z') || (datum >= 'A' && datum <= 'z') || datum == '_' ||datum == '.';
 }
 static const char *_word_end(const char *from) {
   const char *invalid;
@@ -57,7 +63,7 @@ static const char *_word_end(const char *from) {
   }
 }
 
-static llist_t *helper_lex_file(const char *o_name, cmpl_env *env) {
+static llist_t *helper_file_lex(const char *o_name, cmpl_env_t *env) {
 #define LINE_ADD { line++; ll_append(result, r_line); r_line = ll_make(); }
 #define LINE_INC { if (*data == '\n') LINE_ADD; data++; }
   llist_t *result = ll_make(), *r_line = ll_make();
@@ -91,7 +97,7 @@ static llist_t *helper_lex_file(const char *o_name, cmpl_env *env) {
 #undef LINE_INC
 #undef LINE_ADD
 }
-static llist_t *helper_substitute_file(llist_t *orig, const char *what, const char *with) { //ALLOCATES result[] FULLY.
+static llist_t *helper_file_substitute(llist_t *orig, const char *what, const char *with) { //ALLOCATES result[] FULLY.
   llist_t *result = ll_make();
   size_t what_size = strlen(what), with_size = strlen(with);
   int size_diff = (int)(with_size - (what_size+1));
@@ -135,7 +141,7 @@ static llist_t *helper_substitute_file(llist_t *orig, const char *what, const ch
 
   return result;
 }
-static llist_t *helper_copy_file(llist_t *orig) {
+static llist_t *helper_file_copy(llist_t *orig) {
   llist_t *result = ll_make();
   {
     void *file = orig->data->value;
@@ -157,7 +163,7 @@ static llist_t *helper_copy_file(llist_t *orig) {
 
   return result;
 }
-static void helper_free_file(llist_t *file) {
+static void helper_file_free(llist_t *file) {
   {
     free(ll_shift(file));
     ll_shift(file);
@@ -168,23 +174,15 @@ static void helper_free_file(llist_t *file) {
   }
   ll_free(file);
 }
-static void helper_add_line(cmpl_t *_env, llist_t *to) {
+
+static void helper_line_add(cmpl_t *_env, llist_t *to) {
   STRMAKE(strlen(_env->file), file, _env->file);
   ll_prepend(to, (void*)_env->f_line);
   ll_prepend(to, file);
 }
 static void helper_reload(cmpl_t *_env, llist_t *files) {
   llist_t *active = files->data->value;
-  helper_add_line(_env, active);
-}
-
-static void *helper_add_insn(cmpl_t *_env, size_t size) {
-  void *o_mem = emalloc(size);
-  llist_t *mem = ll_make();
-  ll_append(_env->section, mem);
-  ll_append(mem, (void*) size);
-  ll_append(mem, o_mem);
-  return o_mem;
+  helper_line_add(_env, active);
 }
 
 static expr_t *_lex_expr(const char *expr, cmpl_t *_env) {
@@ -351,15 +349,16 @@ static size_t _parse_expr(const expr_t *expr, cmpl_t *_env, size_t *callback) {
       }
     case EXPR_LIT:
       {
-	if (!hm_get(_env->symbols, expr->lit.literal))
+	if (!strcmp(expr->lit.literal, ".")) return _env->section->address;
+	else if (!hm_get(_env->symbols, expr->lit.literal))
 	  return strtoll(expr->lit.literal, 0, 0);
-	llist_t *symbol = hm_get(_env->symbols, expr->lit.literal)->value;
-	if (strcmp(symbol->data->value, "absolute")) {
+	symbol_t *symbol = hm_get(_env->symbols, expr->lit.literal)->value;
+	if (strcmp(symbol->section, "absolute")) {
 	  if (!callback)
 	    ERR("Expression parser: requires absolute operands",0)
 	  else *callback = 1;
 	} else {
-	  return (size_t) symbol->data->next->value;
+	  return (size_t) symbol->value;
 	}
 	break;
       }
@@ -381,31 +380,80 @@ static void _free_expr(expr_t *expr) {
   }
   free(expr);
 }
-void helper_symbol_set(cmpl_t *_env, const char *name, size_t value) {
-  STRMAKE(strlen(name), symbol, name);
-  llist_t *r_symbol = ll_make();
-  ll_append(r_symbol, "absolute");
-  ll_append(r_symbol, (void*) value);
-  llist_t *old = hm_put(_env->symbols, symbol, r_symbol);
-  if (old) {
-    ll_free(old);
-    free(symbol);
+
+static void *helper_insn_add(_section_t *section, size_t size) {
+  void *o_mem = emalloc(size);
+  llist_t *mem = ll_make();
+  ll_append(section->data, mem);
+  ll_append(mem, (void*) size);
+  ll_append(mem, o_mem);
+  return o_mem;
+}
+static void helper_section_add(hashmap_t *sections, const char *name, _section_t** current) {
+  if (hm_get(sections, name)) {
+    *current = hm_get(sections, name)->value;
+  } else {
+    _section_t *section = NEW(_section_t);
+    section->address = 0;
+    section->bitness = *current ? (*current)->bitness : 1;
+    section->data = ll_make();
+    section->expr = ll_make();
+    STRCPY(strlen(name),section->name,name);
+    hm_put(sections, section->name, section);
+    *current = section;
   }
 }
-size_t helper_symbol_expr(cmpl_t *_env, const char *expr, size_t offset, size_t size) {
+static size_t helper_symbol_expr(cmpl_t *_env, const char *expr, size_t offset, size_t size) {
   expr_t *lexed = _lex_expr(expr, _env);
   if (!lexed) return 0;
   size_t callback = 0;
   size_t result = _parse_expr(lexed, _env, size ? &callback : 0);
   if (callback) {
-    llist_t *call = ll_make();
-    ll_append(call, (void*) (((size_t)_env->section->data->value) + offset));
-    ll_append(call, lexed);
-    ll_append(call, (void*) size);
+    expr_info_t *call = NEW(expr_info_t);
+    call->address = _env->section->address + offset;
+    call->size = size;
+    STRCPY(strlen(expr), call->expression, expr);
     return 0;
   }
   _free_expr(lexed);
   return result;
+}
+static void helper_symbol_set(cmpl_t *_env, const char *section, const char *name, size_t value) {
+  if (!strcmp(name, ".")) {
+    size_t *addr_ptr = &_env->section->address;
+    size_t needed = value - *addr_ptr;
+    if (value > *addr_ptr) {
+      int8_t *o_mem = helper_insn_add(_env->section, needed);
+      memset(o_mem, 0, needed);
+      *addr_ptr += needed;
+    }
+    return;
+  }
+  STRMAKE(strlen(name), symbol, name);
+  symbol_t *r_symbol = NEW(symbol_t);
+  r_symbol->section = section;
+  r_symbol->value = value;
+  r_symbol->global = 0;
+  symbol_t *old = hm_put(_env->symbols, symbol, r_symbol);
+  if (old) {
+    r_symbol->global = old->global;
+    free(old);
+    free(symbol);
+  }
+}
+static void helper_symbol_global(cmpl_t *_env, const char *name) {
+  STRMAKE(strlen(name), symbol, name);
+  symbol_t *r_symbol = NEW(symbol_t);
+  r_symbol->section = 0;
+  r_symbol->value = 0;
+  r_symbol->global = 1;
+  symbol_t *old = hm_put(_env->symbols, symbol, r_symbol);
+  if (old) {
+    r_symbol->section = old->section;
+    r_symbol->value = old->value;
+    free(old);
+    free(symbol);
+  }
 }
 
 static void _parse_macro(const array_t *args, cmpl_t *_env, llist_t *dl) {
@@ -417,7 +465,7 @@ static void _parse_macro(const array_t *args, cmpl_t *_env, llist_t *dl) {
     ll_append(operands, operand);
   }
 
-  helper_add_line(_env, dl);
+  helper_line_add(_env, dl);
   ll_prepend(dl, operands);
   ll_prepend(dl, symbol);
 }
@@ -430,7 +478,7 @@ static void _parse_irp(const array_t *args, cmpl_t *_env, llist_t *dl) {
     ll_prepend(operands, operand);
   }
 
-  helper_add_line(_env, dl);
+  helper_line_add(_env, dl);
   ll_prepend(dl, operands);
   ll_prepend(dl, symbol);
 }
@@ -439,7 +487,7 @@ static void _parse_irpc(const array_t *args, cmpl_t *_env, llist_t *dl) {
   STRMAKE(strlen(ARG(0)), symbol, ARG(0));
   STRMAKE(strlen(ARG(1)), operands, ARG(1));
 
-  helper_add_line(_env, dl);
+  helper_line_add(_env, dl);
   ll_prepend(dl, operands);
   ll_prepend(dl, symbol);
 }
@@ -447,34 +495,34 @@ static void _parse_include(const array_t *args, cmpl_t *_env, llist_t *files) {
   ERR_ONLY(1, ".include",);
 
   helper_reload(_env, files);
-  ll_prepend(files, helper_lex_file(ARG(0), _env->env));
+  ll_prepend(files, helper_file_lex(ARG(0), _env->env));
 }
 static void _parse_ifdef(const array_t *args, cmpl_t *_env, llist_t *history, llist_t *dl) {
   ERR_ONLY(1, ".ifdef",);
   if (hm_get(_env->symbols, ARG(0))) {
     ll_prepend(history, "i1"); 
-    helper_add_line(_env, dl);
+    helper_line_add(_env, dl);
   } else ll_prepend(history, "i0");
 }
 static void _parse_ifndef(const array_t *args, cmpl_t *_env, llist_t *history, llist_t *dl) {
   ERR_ONLY(1, ".ifndef",);
   if (!hm_get(_env->symbols, ARG(0))) {
     ll_prepend(history, "i1"); 
-    helper_add_line(_env, dl);
+    helper_line_add(_env, dl);
   } else ll_prepend(history, "i0");
 }
 static void _parse_if(const array_t *args, cmpl_t *_env, llist_t *history, llist_t *dl) {
   ERR_ONLY(1, ".if",);
   if (helper_symbol_expr(_env, ARG(0), 0, 0)) {
     ll_prepend(history, "i1"); 
-    helper_add_line(_env, dl);
+    helper_line_add(_env, dl);
   } else ll_prepend(history, "i0");
 }
 static void _parse_else(cmpl_t *_env, llist_t *history, llist_t *dl) {
   //TODO error if extra args
   if (!strcmp(history->data->value, "i0")) {
     history->data->value = "i1";
-    helper_add_line(_env, dl);
+    helper_line_add(_env, dl);
   } else if (!strcmp(history->data->value, "i1")) history->data->value = "i0";
 }
 static void _parse_endif(cmpl_t *_env, llist_t *dl, llist_t *files) {
@@ -489,7 +537,7 @@ static void _parse_endm(cmpl_t *_env, llist_t *dl, hashmap_t *macros) {
 }
 static void _parse_macro_sub(const array_t *args, cmpl_t *_env, llist_t *o_data, llist_t *files) {//USES helper_substitute() TO files[]
   llist_t *operands = ll_shift(o_data);
-  llist_t *data = helper_copy_file(o_data);
+  llist_t *data = helper_file_copy(o_data);
 
   size_t i = 0;
   E_FOR(entry, operands->data) {
@@ -502,8 +550,8 @@ static void _parse_macro_sub(const array_t *args, cmpl_t *_env, llist_t *o_data,
       STRCPY(strlen(entry->value), what, entry->value);
       with = (char*) ARG(i);
     } else ERR("Macro call requires more arguments",);
-    llist_t *new_data = helper_substitute_file(data, what, with);
-    helper_free_file(data);
+    llist_t *new_data = helper_file_substitute(data, what, with);
+    helper_file_free(data);
     data = new_data;
     free(what);
     i++;
@@ -519,13 +567,13 @@ static void _parse_endr(cmpl_t *_env, const char *type, llist_t *dl, llist_t *fi
     char *operands = ll_shift(dl);
     for (int i = strlen(operands) - 1; i >= 0; i--) {
       uint16_t ch = operands[i];
-      ll_prepend(files, helper_substitute_file(dl, symbol, (char*) &ch));
+      ll_prepend(files, helper_file_substitute(dl, symbol, (char*) &ch));
     }
     free(operands);
   } else {
     llist_t *operands = ll_shift(dl);
     E_FOR(operand, operands->data)
-      ll_prepend(files, helper_substitute_file(dl, symbol, operand->value));
+      ll_prepend(files, helper_file_substitute(dl, symbol, operand->value));
     ll_free_val(operands);
   }
   free(symbol);
@@ -534,35 +582,35 @@ static void _parse_err(const array_t *args, cmpl_t *_env) { //PURE
   ERR_ONLY(1, ".err",);
   ERR(ARG(0),);
 }
-static void _parse_int(const array_t *args, cmpl_t *_env, size_t size) {
+static void _parse_int(const array_t *args, cmpl_t *_env, size_t size) { //EXPRESSION IMPURITY
   if (args->size > 0) {
     size_t total = args->size*size;
-    int8_t *o_mem = helper_add_insn(_env, total);
+    int8_t *o_mem = helper_insn_add(_env->section, total);
     for (size_t i = 0; i < args->size; i++) {
       size_t data = helper_symbol_expr(_env, ARG(i), i*size, size);
       memcpy(o_mem+i*size, &data, size);
     }
-    *((size_t*)&_env->section->data->value) += total;
+    _env->section->address += total;
   }
 }
 static void _parse_float(const array_t *args, cmpl_t *_env) { //PURE
   if (args->size > 0) {
     size_t total = args->size*4;
-    float *o_mem = helper_add_insn(_env, total);
+    float *o_mem = helper_insn_add(_env->section, total);
     for (size_t i = 0; i < args->size; i++) {
       o_mem[i] = strtod(ARG(i), 0);
     }
-    *((size_t*)&_env->section->data->value) += total;
+    _env->section->address += total;
   }
 }
 static void _parse_double(const array_t *args, cmpl_t *_env) { //PURE
   if (args->size > 0) {
     size_t total = args->size*8;
-    double *o_mem = helper_add_insn(_env, total);
+    double *o_mem = helper_insn_add(_env->section, total);
     for (size_t i = 0; i < args->size; i++) {
       o_mem[i] = strtod(ARG(i), 0);
     }
-    *((size_t*)&_env->section->data->value) += total;
+    _env->section->address += total;
   }
 }
 static void _parse_ascii(const array_t *args, cmpl_t *_env) { //PURE
@@ -570,13 +618,13 @@ static void _parse_ascii(const array_t *args, cmpl_t *_env) { //PURE
     size_t total = 0;
     for (int i = 0; i < args->size; i++)
       total += strlen(ARG(i)) - 2;
-    char *o_mem = helper_add_insn(_env, total);
+    char *o_mem = helper_insn_add(_env->section, total);
     for (size_t i = 0; i < args->size; i++) {
       size_t loc_size = strlen(ARG(i)) - 2;
       memcpy(o_mem, ARG(i)+1, loc_size);
       o_mem += loc_size;
     }
-    *((size_t*)&_env->section->data->value) += total;
+    _env->section->address += total;
   }
 }
 static void _parse_asciz(const array_t *args, cmpl_t *_env) { //PURE
@@ -584,14 +632,14 @@ static void _parse_asciz(const array_t *args, cmpl_t *_env) { //PURE
     size_t total = 0;
     for (int i = 0; i < args->size; i++)
       total += strlen(ARG(i)) - 1;
-    char *o_mem = helper_add_insn(_env, total);
+    char *o_mem = helper_insn_add(_env->section, total);
     for (size_t i = 0; i < args->size; i++) {
       size_t loc_size = strlen(ARG(i)) - 2;
       memcpy(o_mem, ARG(i)+1, loc_size);
       o_mem[loc_size] = '\0';
       o_mem += loc_size + 1;
     }
-    *((size_t*)&_env->section->data->value) += total;
+    _env->section->address += total;
   }
 }
 static void _parse_skip(const array_t *args, cmpl_t *_env) { //PURE
@@ -600,9 +648,9 @@ static void _parse_skip(const array_t *args, cmpl_t *_env) { //PURE
   if (args->size > 1)
     val = strtol(ARG(1), 0, 0);
   if (!size) ERR(".space/.skip requires a valid size",);
-  int8_t *o_mem = helper_add_insn(_env, size);
+  int8_t *o_mem = helper_insn_add(_env->section, size);
   memset(o_mem, (int8_t)val, size);
-  *((size_t*)&_env->section->data->value) += size;
+  _env->section->address += size;
 }
 static void _parse_fill(const array_t *args, cmpl_t *_env) { //PURE
   ERR_BETWEEN(1, 3, ".fill",);
@@ -614,11 +662,11 @@ static void _parse_fill(const array_t *args, cmpl_t *_env) { //PURE
   if(!size) size = 1;
   else if (size > 8) ERR(".fill requires a size less or equal than 8",);
   if (!repeat) ERR(".fill requires a valid repeat",);
-  int8_t *o_mem = helper_add_insn(_env, size*repeat);
+  int8_t *o_mem = helper_insn_add(_env->section, size*repeat);
   for (size_t i = 0; i < size*repeat; i += size) {
     memcpy(o_mem+i, &val, size);
   }
-  *((size_t*)&_env->section->data->value) += size*repeat;
+  _env->section->address += size*repeat;
 }
 static void _parse_align(const array_t *args, cmpl_t *_env) { //PURE
   //TODO .balign and .p2align
@@ -629,10 +677,10 @@ static void _parse_align(const array_t *args, cmpl_t *_env) { //PURE
   if (args->size > 2)
     max = strtol(ARG(2), 0, 0);
   if (!align) ERR(".align requires a valid alignment",);
-  size_t *addr_ptr = (size_t*)&_env->section->data->value;
+  size_t *addr_ptr = &_env->section->address;
   size_t needed = (align - (*addr_ptr % align)) % align;
   if (needed && (!max || needed < max)) {
-    int8_t *o_mem = helper_add_insn(_env, needed);
+    int8_t *o_mem = helper_insn_add(_env->section, needed);
     memset(o_mem, (int8_t)val, needed);
     *addr_ptr += needed;
   }
@@ -643,39 +691,39 @@ static void _parse_org(const array_t *args, cmpl_t *_env) { //PURE
   if (args->size > 1)
     val = strtol(ARG(1), 0, 0);
   if (!until) ERR(".org requires a valid address",);
-  size_t *addr_ptr = (size_t*)&_env->section->data->value;
+  size_t *addr_ptr = &_env->section->address;
   size_t needed = until - *addr_ptr;
   if (until > *addr_ptr) {
-    int8_t *o_mem = helper_add_insn(_env, needed);
+    int8_t *o_mem = helper_insn_add(_env->section, needed);
     memset(o_mem, (int8_t)val, needed);
     *addr_ptr += needed;
   }
 }
-static void _parse_equ(const array_t *args, cmpl_t *_env) {
+static void _parse_equ(const array_t *args, cmpl_t *_env) { //EXPRESSION IMPURITY
   ERR_ONLY(2, ".set/.equ",);
-  helper_symbol_set(_env, ARG(0), helper_symbol_expr(_env, ARG(1), 0, 0));
+  helper_symbol_set(_env, "absolute", ARG(0), helper_symbol_expr(_env, ARG(1), 0, 0));
 }
-static void _parse_equiv(const array_t *args, cmpl_t *_env) {
+static void _parse_equiv(const array_t *args, cmpl_t *_env) { //EXPRESSION IMPURITY
   ERR_ONLY(2, ".equiv",);
   if (hm_get(_env->symbols, ARG(0)))
     ERR(".equiv failed, already exists",);
-  helper_symbol_set(_env, ARG(0), helper_symbol_expr(_env, ARG(1), 0, 0));
+  helper_symbol_set(_env, "absolute", ARG(0), helper_symbol_expr(_env, ARG(1), 0, 0));
 }
-static void _parse_section(hashmap_t *sections, const char *name, char** s_name) {
-  if (hm_get(sections, name)) {
-    *s_name = (char*) hm_get(sections, name)->str;
-  } else {
-    size_t old_32 = (size_t) ((llist_t*)hm_get(sections, name)->value)->data->next->next->value;
-    STRCPY(strlen(name), *s_name, name);
-    llist_t *section = ll_make();
-    hm_put(sections, *s_name, section);
-    ll_append(section, 0);
-    ll_append(section, ll_make());
-    ll_append(section, (void*)old_32);
-  }
+static void _parse_lcomm(const array_t *args, cmpl_t *_env, hashmap_t *sections, uint8_t global) {
+  ERR_ONLY(2,".lcomm/.comm",);
+  size_t size = helper_symbol_expr(_env, ARG(1), 0, 0);
+
+  _section_t *bss = 0;
+  helper_section_add(sections, ".bss", &bss);
+  helper_symbol_set(_env, ".bss", ARG(0), bss->address);
+  int8_t *o_mem = helper_insn_add(bss, size);
+  memset(o_mem, 0, size);
+  bss->address += size;
+
+  if (global) helper_symbol_global(_env, ARG(0));
 }
 
-static uint8_t _parse_register(const char *o_word) {
+static uint8_t _parse_register(const char *o_word) { //PURE
   STRMAKE(strlen(o_word), word, o_word);
   char *d_word = word;
   uint8_t product = 0;
@@ -718,9 +766,9 @@ static uint32_t _parse_immediate(const char *word, cmpl_t *_env, size_t offset, 
     size_t result = helper_symbol_expr(_env, word+1, offset, size);
     return result;
   }
-  return 0;
+  ERR("Expected immediate, got unknown",0);
 }
-static char _parse_type(const char *word) {
+static char _parse_type(const char *word) { //PURE
   if (strlen(word) < 2) return 'i';
   if (*word == '$')
     return 'l';
@@ -729,45 +777,33 @@ static char _parse_type(const char *word) {
   return 'i';
 }
 
-static void _parsei_2reg(const array_t *args, cmpl_t *_env, int opcode) {
+static void _parsei_2reg(const array_t *args, cmpl_t *_env, int opcode) { //PURE
   ERR_ONLY(2, "Instruction",);
   uint8_t r1 = _parse_register(ARG(0)), r2 = _parse_register(ARG(1));
   if (r1 == 0xFF || r2 == 0xFF) ERR("Operands not valid",);
   if (r1 & 0x20 && r2 & 0x20) ERR("Both operands cannot be pointers",);
   if ((r1 & 0x40) ^ (r2 & 0x40)) ERR("Operands sizes must match",);
-  uint8_t *o_mem = emalloc(3);
-  llist_t *mem = ll_make();
-  ll_append(_env->section, mem);
-  ll_append(mem, (void*) 3);
-  ll_append(mem, o_mem);
+  uint8_t *o_mem = helper_insn_add(_env->section, 3);
   o_mem[0] = opcode; o_mem[1] = r2 | ((r1 & 0x20) >> 1); o_mem[2] = r1;
-  *((size_t*)&_env->section->data->value) += 3;
+  _env->section->address += 3;
 }
-static void _parsei_1reg(const array_t *args, cmpl_t *_env, int opcode) {
+static void _parsei_1reg(const array_t *args, cmpl_t *_env, int opcode) { //PURE
   ERR_ONLY(1, "Instruction",);
   uint8_t r1 = _parse_register(ARG(0));
   if (r1 == 0xFF) ERR("Operand not valid",);
-  uint8_t *o_mem = emalloc(2);
-  llist_t *mem = ll_make();
-  ll_append(_env->section, mem);
-  ll_append(mem, (void*) 2);
-  ll_append(mem, o_mem);
+  uint8_t *o_mem = helper_insn_add(_env->section, 2);
   o_mem[0] = opcode; o_mem[1] = r1;
-  *((size_t*)&_env->section->data->value) += 2;
+  _env->section->address += 2;
 }
-static void _parsei_1imm(const array_t *args, cmpl_t *_env, int opcode) {
+static void _parsei_1imm(const array_t *args, cmpl_t *_env, int opcode) { //PURE
   ERR_ONLY(1, "Instruction",);
   if (_parse_type(ARG(0)) != 'l') ERR("Operand not valid",);
   uint32_t r1 = _parse_immediate(ARG(0), _env, 1, 2);
-  uint8_t *o_mem = emalloc(3);
-  llist_t *mem = ll_make();
-  ll_append(_env->section, mem);
-  ll_append(mem, (void*) 3);
-  ll_append(mem, o_mem);
+  uint8_t *o_mem = helper_insn_add(_env->section, 3);
   o_mem[0] = opcode; *(uint16_t*)(o_mem + 1) = r1;
-  *((size_t*)&_env->section->data->value) += 3;
+  _env->section->address += 3;
 }
-static void _parsei_2reg_imm(const array_t *args, cmpl_t *_env, int opcode, int alt_opcode) {
+static void _parsei_2reg_imm(const array_t *args, cmpl_t *_env, int opcode, int alt_opcode) { //PURE
   ERR_ONLY(2, "Instruction",);
   uint8_t r_type = _parse_type(ARG(0));
   uint8_t r2 = _parse_register(ARG(1));
@@ -775,105 +811,68 @@ static void _parsei_2reg_imm(const array_t *args, cmpl_t *_env, int opcode, int 
   if (r_type == 'l') {
     uint32_t imm1 = _parse_immediate(ARG(0), _env, 2, 2);
     if (r2 & 0x40) ERR("Cannot use Extended on 1reg-1imm",);
-    uint8_t *o_mem = emalloc(4);
-    llist_t *mem = ll_make();
-    ll_append(_env->section, mem);
-    ll_append(mem, (void*) 4);
-    ll_append(mem, o_mem);
+    uint8_t *o_mem = helper_insn_add(_env->section, 4);
     o_mem[0] = alt_opcode; o_mem[1] = r2; ((uint16_t*)o_mem)[1] = imm1;
-    *((size_t*)&_env->section->data->value) += 4;
+    _env->section->address += 4;
   } else if (r_type == 'r') {
     uint8_t r1 = _parse_register(ARG(0));
     if (r1 & 0x20 && r2 & 0x20) ERR("Both operands cannot be pointers",);
     if ((r1 & 0x40) ^ (r2 & 0x40)) ERR("Operands sizes must match",);
-    uint8_t *o_mem = emalloc(3);
-    llist_t *mem = ll_make();
-    ll_append(_env->section, mem);
-    ll_append(mem, (void*) 3);
-    ll_append(mem, o_mem);
+    uint8_t *o_mem = helper_insn_add(_env->section, 3);
     o_mem[0] = opcode; o_mem[1] = r2 | ((r1 & 0x20) >> 1); o_mem[2] = r1;
-    *((size_t*)&_env->section->data->value) += 3;
+    _env->section->address += 3;
   } else ERR("Operand not valid",);
 }
-static void _parsei_1reg_imm(const array_t *args, cmpl_t *_env, int opcode, int alt_opcode) {
+static void _parsei_1reg_imm(const array_t *args, cmpl_t *_env, int opcode, int alt_opcode) { //PURE
   ERR_ONLY(1, "Instruction",);
   uint8_t r_type = _parse_type(ARG(0));
   if (r_type == 'l') {
     uint32_t r1 = _parse_immediate(ARG(0), _env, 1, 2);
-    uint8_t *o_mem = emalloc(3);
-    llist_t *mem = ll_make();
-    ll_append(_env->section, mem);
-    ll_append(mem, (void*) 3);
-    ll_append(mem, o_mem);
+    uint8_t *o_mem = helper_insn_add(_env->section, 3);
     o_mem[0] = alt_opcode; *(uint16_t*)(o_mem + 1) = r1;
-    *((size_t*)&_env->section->data->value) += 3;
+    _env->section->address += 3;
   } else if (r_type == 'r') {
     uint8_t r1 = _parse_register(ARG(0));
-    uint8_t *o_mem = emalloc(2);
-    llist_t *mem = ll_make();
-    ll_append(_env->section, mem);
-    ll_append(mem, (void*) 2);
-    ll_append(mem, o_mem);
+    uint8_t *o_mem = helper_insn_add(_env->section, 2);
     o_mem[0] = opcode; o_mem[1] = r1;
-    *((size_t*)&_env->section->data->value) += 2;
+    _env->section->address += 2;
   } else ERR("Operand not valid",);
 }
-static void _parsei_1reg_1imm(const array_t *args, cmpl_t *_env, int opcode) {
+static void _parsei_1reg_1imm(const array_t *args, cmpl_t *_env, int opcode) { //PURE
   ERR_ONLY(2, "Instruction",);
   if (_parse_type(ARG(0)) != 'l') ERR("Operands not valid",);
   uint8_t r2 = _parse_register(ARG(1));
   if (r2 == 0xFF) ERR("Operands not valid",);
   uint32_t imm1 = _parse_immediate(ARG(0), _env, 2, 1);
-  uint8_t *o_mem = emalloc(3);
-  llist_t *mem = ll_make();
-  ll_append(_env->section, mem);
-  ll_append(mem, (void*) 3);
-  ll_append(mem, o_mem);
+  uint8_t *o_mem = helper_insn_add(_env->section, 3);
   o_mem[0] = opcode; o_mem[1] = r2; o_mem[2] = imm1;
-  *((size_t*)&_env->section->data->value) += 4;
+  _env->section->address += 4;
 }
-static void _parsei_jcc(const array_t *args, cmpl_t *_env, int opcode, int condition) {
+static void _parsei_jcc(const array_t *args, cmpl_t *_env, int opcode, int condition) { //PURE
   ERR_ONLY(1, "Instruction",);
   if (_parse_type(ARG(0)) != 'l') ERR("Operand not valid",);
   uint32_t r1 = _parse_immediate(ARG(0), _env, 2, 2);
-  uint8_t *o_mem = emalloc(4);
-  llist_t *mem = ll_make();
-  ll_append(_env->section, mem);
-  ll_append(mem, (void*) 4);
-  ll_append(mem, o_mem);
+  uint8_t *o_mem = helper_insn_add(_env->section, 4);
   o_mem[0] = opcode; o_mem[1] = condition; ((uint16_t*)o_mem)[1] = r1;
-  *((size_t*)&_env->section->data->value) += 4;
+  _env->section->address += 4;
 }
-static void _parsei_movcc(const array_t *args, cmpl_t *_env, int opcode, int condition) {
+static void _parsei_movcc(const array_t *args, cmpl_t *_env, int opcode, int condition) { //PURE
   ERR_ONLY(2, "Instruction",);
   uint8_t r1 = _parse_register(ARG(0)), r2 = _parse_register(ARG(1));
   if (r1 == 0xFF || r2 == 0xFF) ERR("Operands not valid",);
   if (r1 & 0x20 && r2 & 0x20) ERR("Both operands cannot be pointers",);
   if ((r1 & 0x40) ^ (r2 & 0x40)) ERR("Operands sizes must match",);
-  uint8_t *o_mem = emalloc(4);
-  llist_t *mem = ll_make();
-  ll_append(_env->section, mem);
-  ll_append(mem, (void*) 4);
-  ll_append(mem, o_mem);
+  uint8_t *o_mem = helper_insn_add(_env->section, 4);
   o_mem[0] = opcode; o_mem[1] = condition; o_mem[2] = r2 | ((r1 & 0x20) >> 1); o_mem[3] = r1;
-  *((size_t*)&_env->section->data->value) += 4;
+  _env->section->address += 4;
 }
-static void _parsei_pure(const array_t *args, cmpl_t *_env, int opcode) {
+static void _parsei_pure(const array_t *args, cmpl_t *_env, int opcode) { //PURE
   ERR_NONE("Instruction",);
-  uint8_t *o_mem = emalloc(1);
-  llist_t *mem = ll_make();
-  ll_append(_env->section, mem);
-  ll_append(mem, (void*) 1);
-  ll_append(mem, o_mem);
+  uint8_t *o_mem = helper_insn_add(_env->section, 1);
   o_mem[0] = opcode;
-  *((size_t*)&_env->section->data->value) += 1;
+  _env->section->address += 1;
 }
 
-//TODO add expressions
-////.macro .irp .irpc .ifdef .if .include .err PPT
-//.byte .short .int .long .single/.float .double .ascii .asciz CT
-//.space/.skip .fill .align .org .code16 .code32 .section CT
-//.set/.equ .equiv CT
 //.comm .lcomm .globl LT
 
 //Signature convention:
@@ -884,25 +883,21 @@ static void _parsei_pure(const array_t *args, cmpl_t *_env, int opcode) {
 // signature 	= (array | set | map | literal) , ["..."]
 // "..." means "0 or more"
 // "*" means "needs to be freed". In case of hashmap, key needs to be freed
+// TODO update signatures
 
-//Signature args[file, environment] ==> data[#*symbol[address, section], sections[unwrap$[*name, section[size, symbol[address, *name, size]..., *bytecode]]...]]
-llist_t *compile(const char *orig, cmpl_env *env) {
+compiled_t *compile(const char *orig, cmpl_env_t *env) {
   //TODO '.' special symbol
   cmpl_t *const _env = NEW(cmpl_t);
   hashmap_t *const macros = hm_make(), *const sections = hm_make();
   llist_t *const files = ll_make(), *dl = ll_make(), *const history = ll_make();
-  STRMAKE(5, s_name, ".text");
   
   {
     _env->env = env;
     _env->file = 0;
     _env->symbols = hm_make();
-    _env->section = ll_make();
-    ll_append(_env->section, 0);
-    ll_append(_env->section, ll_make());
-    ll_append(_env->section, (void*)1);
-    hm_put(sections, s_name, _env->section);
-    ll_append(files, helper_lex_file(orig, env));
+    _env->section = 0;
+    helper_section_add(sections, ".text", &_env->section);
+    ll_append(files, helper_file_lex(orig, env));
   }
 
 skip:
@@ -923,14 +918,11 @@ skip:
 	while (word && strchr(word, '\0') - strchr(word, ':') == 1) {
 	  STRMAKE(strlen(word) - 1, symbol, word);
 	  free(word);
-	  if (hm_get(_env->symbols, symbol)) {
-	    free(symbol);
-	  } else {
-	    llist_t *r_symbol = ll_make();
-	    ll_append(r_symbol, s_name);
-	    ll_append(r_symbol, _env->section->data->value);
-	    hm_put(_env->symbols, symbol, r_symbol);
+	  struct _lkee *old = hm_get(_env->symbols, symbol);
+	  if (!old || ((symbol_t*)old->value)->section == 0) {
+	    helper_symbol_set(_env, _env->section->name, symbol, _env->section->address);
 	  }
+	  free(symbol);
 	  word = ll_shift(line);
 	}
 	if (!word) {
@@ -939,260 +931,142 @@ skip:
 	}
 	array_t *args = ll_free_to(line);
 	
-	if (*word == '.') {
-	  if (!strcmp(word, ".byte")) {
-	    _parse_int(args, _env, 1);
-	  } else if (!strcmp(word, ".short")) {
-	    _parse_int(args, _env, 2);
-	  } else if (!strcmp(word, ".int")) {
-	    _parse_int(args, _env, 4);
-	  } else if (!strcmp(word, ".long")) {
-	    _parse_int(args, _env, 8);
-	  } else if (!strcmp(word, ".single") || !strcmp(word, ".float")) {
-	    _parse_float(args, _env);
-	  } else if (!strcmp(word, ".double")) {
-	    _parse_double(args, _env);
-	  } else if (!strcmp(word, ".ascii")) {
-	    _parse_ascii(args, _env);
-	  } else if (!strcmp(word, ".asciz")) {
-	    _parse_asciz(args, _env);
-	  } else if (!strcmp(word, ".include")) {
-	    _parse_include(args, _env, files);
-	    ar_free_val(args);
-	    free(word);
-	    goto skip;
-	  } else if (!strcmp(word, ".err")) {
-	    _parse_err(args, _env);
-	  } else if (!strcmp(word, ".ifdef")) {
-	    _parse_ifdef(args, _env, history, dl);
-	  } else if (!strcmp(word, ".ifndef")) {
-	    _parse_ifndef(args, _env, history, dl);
-	  } else if (!strcmp(word, ".if")) {
-	    _parse_if(args, _env, history, dl);
-	  } else if (!strcmp(word, ".macro")) {
-	    _parse_macro(args, _env, dl);
-	    ll_prepend(history, "m");
-	  } else if (!strcmp(word, ".irp")) {
-	    _parse_irp(args, _env, dl);
-	    ll_prepend(history, "rn");
-	  } else if (!strcmp(word, ".irpc")) {
-	    _parse_irpc(args, _env, dl);
-	    ll_prepend(history, "rc");
-	  } else if (!strcmp(word, ".space") || !strcmp(word, ".skip")) {
-	    _parse_skip(args, _env);
-	  } else if (!strcmp(word, ".fill")) {
-	    _parse_fill(args, _env);
-	  } else if (!strcmp(word, ".align")) {
-	    _parse_align(args, _env);
-	  } else if (!strcmp(word, ".org")) {
-	    _parse_org(args, _env);
-	  } else if (!strcmp(word, ".set") || !strcmp(word, ".equ")) {
-	    _parse_equ(args, _env);
-	  } else if (!strcmp(word, ".equiv")) {
-	    _parse_equiv(args, _env);
-	  } else if (!strcmp(word, ".section")) {
-	    ERR_ONLY(1, ".section",0);
-	    if (*((const char*)ARG(0)) != '.') ERR(".section operand must start from '.'",0);
-	    _parse_section(sections, ARG(0), &s_name);
-	    _env->section = hm_get(sections, s_name)->value;
-	  } else if (!strcmp(word, ".data")) {
-	    ERR_NONE(".data",0);
-	    _parse_section(sections, ".data", &s_name);
-	    _env->section = hm_get(sections, s_name)->value;
-	  } else if (!strcmp(word, ".text")) {
-	    ERR_NONE(".text",0);
-	    _parse_section(sections, ".text", &s_name);
-	    _env->section = hm_get(sections, s_name)->value;
-	  } else if (!strcmp(word, ".code16")) {
-	    ERR_NONE(".code16",0);
-	    _env->section->data->next->next->value = 0;
-	  } else if (!strcmp(word, ".code32")) {
-	    ERR_NONE(".code32",0);
-	    _env->section->data->next->next->value = (void*) 1;
-	  } else if (!strcmp(word, ".comm")) {
-
-	  } else if (!strcmp(word, ".lcomm")) {
-
-	  } else if (!strcmp(word, ".globl")) {
-
-	  } else {
-	    ERR("Unknown directive",0);
-	  }
-	} else if (strchr(word, '=')) {
+	if (strchr(word, '=')) {
 	  {
 	    char *delim = strchr(word, '=');
 	    STRMAKE(delim-word,symbol,word);
-	    helper_symbol_set(_env, symbol, helper_symbol_expr(_env, delim+1, 0, 0));
+	    helper_symbol_set(_env, "absolute", symbol, helper_symbol_expr(_env, delim+1, 0, 0));
 	    free(symbol);
 	  }
+	} else if (*word == '.') {
+	  {
+	    if (!strcmp(word, ".byte")) 	_parse_int(args, _env, 1);
+	    else if (!strcmp(word, ".short")) 	_parse_int(args, _env, 2);
+	    else if (!strcmp(word, ".int")) 	_parse_int(args, _env, 4);
+	    else if (!strcmp(word, ".long")) 	_parse_int(args, _env, 8);
+	    else if (!strcmp(word, ".single") || !strcmp(word, ".float")) _parse_float(args, _env);
+	    else if (!strcmp(word, ".double")) 	_parse_double(args, _env);
+	    else if (!strcmp(word, ".ascii")) 	_parse_ascii(args, _env);
+	    else if (!strcmp(word, ".asciz")) 	_parse_asciz(args, _env);
+	    else if (!strcmp(word, ".include")) {
+	      _parse_include(args, _env, files);
+	      ar_free_val(args);
+	      free(word);
+	      goto skip;
+	    } else if (!strcmp(word, ".err")) 	_parse_err(args, _env);
+	    else if (!strcmp(word, ".ifdef")) 	_parse_ifdef(args, _env, history, dl);
+	    else if (!strcmp(word, ".ifndef")) 	_parse_ifndef(args, _env, history, dl);
+	    else if (!strcmp(word, ".if")) 	_parse_if(args, _env, history, dl);
+	    else if (!strcmp(word, ".macro")) { _parse_macro(args, _env, dl); ll_prepend(history, "m"); } 
+	    else if (!strcmp(word, ".irp")) { 	_parse_irp(args, _env, dl); ll_prepend(history, "rn"); }
+	    else if (!strcmp(word, ".irpc")) { 	_parse_irpc(args, _env, dl); ll_prepend(history, "rc"); }
+	    else if (!strcmp(word, ".space") || !strcmp(word, ".skip")) _parse_skip(args, _env);
+	    else if (!strcmp(word, ".fill")) 	_parse_fill(args, _env);
+	    else if (!strcmp(word, ".align")) 	_parse_align(args, _env);
+	    else if (!strcmp(word, ".org")) 	_parse_org(args, _env);
+	    else if (!strcmp(word, ".set") || !strcmp(word, ".equ")) _parse_equ(args, _env);
+	    else if (!strcmp(word, ".equiv")) 	_parse_equiv(args, _env);
+	    else if (!strcmp(word, ".section")) { 
+	      ERR_ONLY(1, ".section",0);
+	      if (*((const char*)ARG(0)) != '.') ERR(".section operand must start from '.'",0);
+	      helper_section_add(sections, ARG(0), &_env->section);
+	    } else if (!strcmp(word, ".data")) { ERR_NONE(".data",0); helper_section_add(sections, ".data", &_env->section); }
+	    else if (!strcmp(word, ".text")) { ERR_NONE(".text",0); helper_section_add(sections, ".text", &_env->section); }
+	    else if (!strcmp(word, ".code16")) { ERR_NONE(".code16",0); _env->section->bitness = 0; }
+	    else if (!strcmp(word, ".code32")) { ERR_NONE(".code32",0); _env->section->bitness = 1; }
+	    else if (!strcmp(word, ".comm")) _parse_lcomm(args, _env, sections, 1);
+	    else if (!strcmp(word, ".lcomm")) _parse_lcomm(args, _env, sections, 0);
+	    else if (!strcmp(word, ".globl")) { ERR_ONLY(1, ".globl",0); helper_symbol_global(_env, ARG(0)); }
+	    else ERR("Unknown directive",0);
+	  }
 	} else {
-	  if (hm_get(macros, word)) {
-	    _parse_macro_sub(args, _env, hm_get(macros, word)->value, files);
-	    free(word);
-	    ar_free_val(args);
-	    goto skip;
-	  } else if (!strcmp(word, "nop")) {
-	    _parsei_pure(args, _env, I_NOP);
-	  } else if (!strcmp(word, "sleep")) {
-	    _parsei_1reg_imm(args, _env, I_SLEEP, I_SLEEPI);
-	  } else if (!strcmp(word, "gipc")) {
-	    _parsei_1reg(args, _env, I_GIPC);
-	  } else if (!strcmp(word, "mov")) {
-	    _parsei_2reg_imm(args, _env, I_MOV, I_MOVI);
-	  } else if (!strcmp(word, "swap")) {
-	    _parsei_2reg(args, _env, I_SWAP);
-	  } else if (!strcmp(word, "push")) {
-	    _parsei_1reg(args, _env, I_PUSH);
-	  } else if (!strcmp(word, "pop")) {
-	    _parsei_1reg(args, _env, I_POP);
-	  } else if (!strcmp(word, "add")) {
-	    _parsei_2reg_imm(args, _env, I_ADD, I_ADI);
-	  } else if (!strcmp(word, "sub")) {
-	    _parsei_2reg_imm(args, _env, I_SUB, I_SBI);
-	  } else if (!strcmp(word, "mul")) {
-	    _parsei_2reg(args, _env, I_MUL);
-	  } else if (!strcmp(word, "div")) {
-	    _parsei_2reg(args, _env, I_DIV);
-	  } else if (!strcmp(word, "mod")) {
-	    _parsei_2reg(args, _env, I_MOD);
-	  } else if (!strcmp(word, "inc")) {
-	    _parsei_1reg(args, _env, I_INC);
-	  } else if (!strcmp(word, "dec")) {
-	    _parsei_1reg(args, _env, I_DEC);
-	  } else if (!strcmp(word, "fadd")) {
-	    _parsei_2reg(args, _env, I_FADD);
-	  } else if (!strcmp(word, "fsub")) {
-	    _parsei_2reg(args, _env, I_FSUB);
-	  } else if (!strcmp(word, "fmul")) {
-	    _parsei_2reg(args, _env, I_FMUL);
-	  } else if (!strcmp(word, "fdiv")) {
-	    _parsei_2reg(args, _env, I_FDIV);
-	  } else if (!strcmp(word, "i2f")) {
-	    _parsei_2reg(args, _env, I_I2F);
-	  } else if (!strcmp(word, "f2i")) {
-	    _parsei_2reg(args, _env, I_F2I);
-	  } else if (!strcmp(word, "xor")) {
-	    _parsei_2reg_imm(args, _env, I_XOR, I_XORI);
-	  } else if (!strcmp(word, "or")) {
-	    _parsei_2reg_imm(args, _env, I_OR, I_ORI);
-	  } else if (!strcmp(word, "and")) {
-	    _parsei_2reg_imm(args, _env, I_AND, I_ANDI);
-	  } else if (!strcmp(word, "not")) {
-	    _parsei_1reg(args, _env, I_NOT);
-	  } else if (!strcmp(word, "bts")) {
-	    _parsei_1reg_1imm(args, _env, I_BTS);
-	  } else if (!strcmp(word, "btr")) {
-	    _parsei_1reg_1imm(args, _env, I_BTR);
-	  } else if (!strcmp(word, "btc")) {
-	    _parsei_1reg_1imm(args, _env, I_BTC);
-	  } else if (!strcmp(word, "shl")) {
-	    _parsei_1reg_1imm(args, _env, I_SHL);
-	  } else if (!strcmp(word, "shr")) {
-	    _parsei_1reg_1imm(args, _env, I_SHR);
-	  } else if (!strcmp(word, "rol")) {
-	    _parsei_1reg_1imm(args, _env, I_ROL);
-	  } else if (!strcmp(word, "ror")) {
-	    _parsei_1reg_1imm(args, _env, I_ROR);
-	  } else if (!strcmp(word, "int")) {
-	    _parsei_1imm(args, _env, I_INT);
-	  } else if (!strcmp(word, "jmp")) {
-	    _parsei_1reg_imm(args, _env, I_JMP, I_JMPI);
-	  } else if (!strcmp(word, "call")) {
-	    _parsei_1reg_imm(args, _env, I_CALL, I_CALLI);
-	  } else if (!strcmp(word, "rjmp")) {
-	    _parsei_1reg_imm(args, _env, I_RJMP, I_RJMPI);
-	  } else if (!strcmp(word, "rcall")) {
-	    _parsei_1reg_imm(args, _env, I_RCALL, I_RCALLI);
-	  } else if (!strcmp(word, "jae")) {
-	    _parsei_jcc(args, _env, I_JNC, 0x80);
-	  } else if (!strcmp(word, "jnae")) {
-	    _parsei_jcc(args, _env, I_JC, 0x80);
-	  } else if (!strcmp(word, "jb")) {
-	    _parsei_jcc(args, _env, I_JC, 0x80);
-	  } else if (!strcmp(word, "jnb")) {
-	    _parsei_jcc(args, _env, I_JNC, 0x80);
-	  } else if (!strcmp(word, "je")) {
-	    _parsei_jcc(args, _env, I_JC, 0x82);
-	  } else if (!strcmp(word, "jne")) {
-	    _parsei_jcc(args, _env, I_JNC, 0x82);
-	  } else if (!strcmp(word, "jge")) {
-	    _parsei_jcc(args, _env, I_JC, 0x31);
-	  } else if (!strcmp(word, "jnge")) {
-	    _parsei_jcc(args, _env, I_JNC, 0x31);
-	  } else if (!strcmp(word, "jl")) {
-	    _parsei_jcc(args, _env, I_JNC, 0x31);
-	  } else if (!strcmp(word, "jnl")) {
-	    _parsei_jcc(args, _env, I_JC, 0x31);
-	  } else if (!strcmp(word, "jc")) {
-	    _parsei_jcc(args, _env, I_JC, 0x80);
-	  } else if (!strcmp(word, "jnc")) {
-	    _parsei_jcc(args, _env, I_JNC, 0x80);
-	  } else if (!strcmp(word, "jo")) {
-	    _parsei_jcc(args, _env, I_JC, 0x81);
-	  } else if (!strcmp(word, "jno")) {
-	    _parsei_jcc(args, _env, I_JNC, 0x81);
-	  } else if (!strcmp(word, "js")) {
-	    _parsei_jcc(args, _env, I_JC, 0x83);
-	  } else if (!strcmp(word, "jns")) {
-	    _parsei_jcc(args, _env, I_JNC, 0x83);
-	  } else if (!strcmp(word, "jz")) {
-	    _parsei_jcc(args, _env, I_JC, 0x82);
-	  } else if (!strcmp(word, "jnz")) {
-	    _parsei_jcc(args, _env, I_JNC, 0x82);
-	  } else if (!strcmp(word, "movae")) {
-	    _parsei_movcc(args, _env, I_MOVNC, 0x80);
-	  } else if (!strcmp(word, "movnae")) {
-	    _parsei_movcc(args, _env, I_MOVC, 0x80);
-	  } else if (!strcmp(word, "movb")) {
-	    _parsei_movcc(args, _env, I_MOVC, 0x80);
-	  } else if (!strcmp(word, "movnb")) {
-	    _parsei_movcc(args, _env, I_MOVNC, 0x80);
-	  } else if (!strcmp(word, "move")) {
-	    _parsei_movcc(args, _env, I_MOVC, 0x82);
-	  } else if (!strcmp(word, "movne")) {
-	    _parsei_movcc(args, _env, I_MOVNC, 0x82);
-	  } else if (!strcmp(word, "movge")) {
-	    _parsei_movcc(args, _env, I_MOVC, 0x31);
-	  } else if (!strcmp(word, "movnge")) {
-	    _parsei_movcc(args, _env, I_MOVNC, 0x31);
-	  } else if (!strcmp(word, "movl")) {
-	    _parsei_movcc(args, _env, I_MOVNC, 0x31);
-	  } else if (!strcmp(word, "movnl")) {
-	    _parsei_movcc(args, _env, I_MOVC, 0x31);
-	  } else if (!strcmp(word, "movc")) {
-	    _parsei_movcc(args, _env, I_MOVC, 0x80);
-	  } else if (!strcmp(word, "movnc")) {
-	    _parsei_movcc(args, _env, I_MOVNC, 0x80);
-	  } else if (!strcmp(word, "movo")) {
-	    _parsei_movcc(args, _env, I_MOVC, 0x81);
-	  } else if (!strcmp(word, "movno")) {
-	    _parsei_movcc(args, _env, I_MOVNC, 0x81);
-	  } else if (!strcmp(word, "movs")) {
-	    _parsei_movcc(args, _env, I_MOVC, 0x83);
-	  } else if (!strcmp(word, "movns")) {
-	    _parsei_movcc(args, _env, I_MOVNC, 0x83);
-	  } else if (!strcmp(word, "movz")) {
-	    _parsei_movcc(args, _env, I_MOVC, 0x82);
-	  } else if (!strcmp(word, "movnz")) {
-	    _parsei_movcc(args, _env, I_MOVNC, 0x82);
-	  } else if (!strcmp(word, "ret")) {
-	    _parsei_pure(args, _env, I_RET);
-	  } else if (!strcmp(word, "in")) {
-	    _parsei_2reg_imm(args, _env, I_IN, I_INI);
-	  } else if (!strcmp(word, "out")) {
-	    _parsei_2reg_imm(args, _env, I_OUT, I_OUTI);
-	  } else if (!strcmp(word, "crld")) {
-	    _parsei_2reg(args, _env, I_CRLD);
-	  } else if (!strcmp(word, "crst")) {
-	    _parsei_2reg(args, _env, I_CRST);
-	  } else if (!strcmp(word, "sei")) {
-	    _parsei_pure(args, _env, I_SEI);
-	  } else if (!strcmp(word, "cli")) {
-	    _parsei_pure(args, _env, I_CLI);
-	  } else if (!strcmp(word, "iret")) {
-	    _parsei_pure(args, _env, I_IRET);
-	  } else {
-	    ERR("Invalid word",0);
+	  {
+	    if (hm_get(macros, word)) {
+	      _parse_macro_sub(args, _env, hm_get(macros, word)->value, files);
+	      free(word);
+	      ar_free_val(args);
+	      goto skip;
+	    } else if (!strcmp(word, "nop")) _parsei_pure(args, _env, I_NOP);
+	    else if (!strcmp(word, "sleep")) _parsei_1reg_imm(args, _env, I_SLEEP, I_SLEEPI);
+	    else if (!strcmp(word, "gipc")) _parsei_1reg(args, _env, I_GIPC);
+	    else if (!strcmp(word, "mov")) _parsei_2reg_imm(args, _env, I_MOV, I_MOVI);
+	    else if (!strcmp(word, "swap")) _parsei_2reg(args, _env, I_SWAP);
+	    else if (!strcmp(word, "push")) _parsei_1reg(args, _env, I_PUSH);
+	    else if (!strcmp(word, "pop")) _parsei_1reg(args, _env, I_POP);
+	    else if (!strcmp(word, "add")) _parsei_2reg_imm(args, _env, I_ADD, I_ADI);
+	    else if (!strcmp(word, "sub")) _parsei_2reg_imm(args, _env, I_SUB, I_SBI);
+	    else if (!strcmp(word, "mul")) _parsei_2reg(args, _env, I_MUL);
+	    else if (!strcmp(word, "div")) _parsei_2reg(args, _env, I_DIV);
+	    else if (!strcmp(word, "mod")) _parsei_2reg(args, _env, I_MOD);
+	    else if (!strcmp(word, "inc")) _parsei_1reg(args, _env, I_INC);
+	    else if (!strcmp(word, "dec")) _parsei_1reg(args, _env, I_DEC);
+	    else if (!strcmp(word, "fadd")) _parsei_2reg(args, _env, I_FADD);
+	    else if (!strcmp(word, "fsub")) _parsei_2reg(args, _env, I_FSUB);
+	    else if (!strcmp(word, "fmul")) _parsei_2reg(args, _env, I_FMUL);
+	    else if (!strcmp(word, "fdiv")) _parsei_2reg(args, _env, I_FDIV);
+	    else if (!strcmp(word, "i2f")) _parsei_2reg(args, _env, I_I2F);
+	    else if (!strcmp(word, "f2i")) _parsei_2reg(args, _env, I_F2I);
+	    else if (!strcmp(word, "xor")) _parsei_2reg_imm(args, _env, I_XOR, I_XORI);
+	    else if (!strcmp(word, "or")) _parsei_2reg_imm(args, _env, I_OR, I_ORI);
+	    else if (!strcmp(word, "and")) _parsei_2reg_imm(args, _env, I_AND, I_ANDI);
+	    else if (!strcmp(word, "not")) _parsei_1reg(args, _env, I_NOT);
+	    else if (!strcmp(word, "bts")) _parsei_1reg_1imm(args, _env, I_BTS);
+	    else if (!strcmp(word, "btr")) _parsei_1reg_1imm(args, _env, I_BTR);
+	    else if (!strcmp(word, "btc")) _parsei_1reg_1imm(args, _env, I_BTC);
+	    else if (!strcmp(word, "shl")) _parsei_1reg_1imm(args, _env, I_SHL);
+	    else if (!strcmp(word, "shr")) _parsei_1reg_1imm(args, _env, I_SHR);
+	    else if (!strcmp(word, "rol")) _parsei_1reg_1imm(args, _env, I_ROL);
+	    else if (!strcmp(word, "ror")) _parsei_1reg_1imm(args, _env, I_ROR);
+	    else if (!strcmp(word, "int")) _parsei_1imm(args, _env, I_INT);
+	    else if (!strcmp(word, "jmp")) _parsei_1reg_imm(args, _env, I_JMP, I_JMPI);
+	    else if (!strcmp(word, "call")) _parsei_1reg_imm(args, _env, I_CALL, I_CALLI);
+	    else if (!strcmp(word, "rjmp")) _parsei_1reg_imm(args, _env, I_RJMP, I_RJMPI);
+	    else if (!strcmp(word, "rcall")) _parsei_1reg_imm(args, _env, I_RCALL, I_RCALLI);
+	    else if (!strcmp(word, "jae")) _parsei_jcc(args, _env, I_JNC, 0x80);
+	    else if (!strcmp(word, "jnae")) _parsei_jcc(args, _env, I_JC, 0x80);
+	    else if (!strcmp(word, "jb")) _parsei_jcc(args, _env, I_JC, 0x80);
+	    else if (!strcmp(word, "jnb")) _parsei_jcc(args, _env, I_JNC, 0x80);
+	    else if (!strcmp(word, "je")) _parsei_jcc(args, _env, I_JC, 0x82);
+	    else if (!strcmp(word, "jne")) _parsei_jcc(args, _env, I_JNC, 0x82);
+	    else if (!strcmp(word, "jge")) _parsei_jcc(args, _env, I_JC, 0x31);
+	    else if (!strcmp(word, "jnge")) _parsei_jcc(args, _env, I_JNC, 0x31);
+	    else if (!strcmp(word, "jl")) _parsei_jcc(args, _env, I_JNC, 0x31);
+	    else if (!strcmp(word, "jnl")) _parsei_jcc(args, _env, I_JC, 0x31);
+	    else if (!strcmp(word, "jc")) _parsei_jcc(args, _env, I_JC, 0x80);
+	    else if (!strcmp(word, "jnc")) _parsei_jcc(args, _env, I_JNC, 0x80);
+	    else if (!strcmp(word, "jo")) _parsei_jcc(args, _env, I_JC, 0x81);
+	    else if (!strcmp(word, "jno")) _parsei_jcc(args, _env, I_JNC, 0x81);
+	    else if (!strcmp(word, "js")) _parsei_jcc(args, _env, I_JC, 0x83);
+	    else if (!strcmp(word, "jns")) _parsei_jcc(args, _env, I_JNC, 0x83);
+	    else if (!strcmp(word, "jz")) _parsei_jcc(args, _env, I_JC, 0x82);
+	    else if (!strcmp(word, "jnz")) _parsei_jcc(args, _env, I_JNC, 0x82);
+	    else if (!strcmp(word, "movae")) _parsei_movcc(args, _env, I_MOVNC, 0x80);
+	    else if (!strcmp(word, "movnae")) _parsei_movcc(args, _env, I_MOVC, 0x80);
+	    else if (!strcmp(word, "movb")) _parsei_movcc(args, _env, I_MOVC, 0x80);
+	    else if (!strcmp(word, "movnb")) _parsei_movcc(args, _env, I_MOVNC, 0x80);
+	    else if (!strcmp(word, "move")) _parsei_movcc(args, _env, I_MOVC, 0x82);
+	    else if (!strcmp(word, "movne")) _parsei_movcc(args, _env, I_MOVNC, 0x82);
+	    else if (!strcmp(word, "movge")) _parsei_movcc(args, _env, I_MOVC, 0x31);
+	    else if (!strcmp(word, "movnge")) _parsei_movcc(args, _env, I_MOVNC, 0x31);
+	    else if (!strcmp(word, "movl")) _parsei_movcc(args, _env, I_MOVNC, 0x31);
+	    else if (!strcmp(word, "movnl")) _parsei_movcc(args, _env, I_MOVC, 0x31);
+	    else if (!strcmp(word, "movc")) _parsei_movcc(args, _env, I_MOVC, 0x80);
+	    else if (!strcmp(word, "movnc")) _parsei_movcc(args, _env, I_MOVNC, 0x80);
+	    else if (!strcmp(word, "movo")) _parsei_movcc(args, _env, I_MOVC, 0x81);
+	    else if (!strcmp(word, "movno")) _parsei_movcc(args, _env, I_MOVNC, 0x81);
+	    else if (!strcmp(word, "movs")) _parsei_movcc(args, _env, I_MOVC, 0x83);
+	    else if (!strcmp(word, "movns")) _parsei_movcc(args, _env, I_MOVNC, 0x83);
+	    else if (!strcmp(word, "movz")) _parsei_movcc(args, _env, I_MOVC, 0x82);
+	    else if (!strcmp(word, "movnz")) _parsei_movcc(args, _env, I_MOVNC, 0x82);
+	    else if (!strcmp(word, "ret")) _parsei_pure(args, _env, I_RET);
+	    else if (!strcmp(word, "in")) _parsei_2reg_imm(args, _env, I_IN, I_INI);
+	    else if (!strcmp(word, "out")) _parsei_2reg_imm(args, _env, I_OUT, I_OUTI);
+	    else if (!strcmp(word, "crld")) _parsei_2reg(args, _env, I_CRLD);
+	    else if (!strcmp(word, "crst")) _parsei_2reg(args, _env, I_CRST);
+	    else if (!strcmp(word, "sei")) _parsei_pure(args, _env, I_SEI);
+	    else if (!strcmp(word, "cli")) _parsei_pure(args, _env, I_CLI);
+	    else if (!strcmp(word, "iret")) _parsei_pure(args, _env, I_IRET);
+	    else ERR("Invalid word",0);
 	  }
 	}
 	free(word);
@@ -1245,7 +1119,7 @@ skip:
     ll_free(file);
   }
 
-  llist_t *result = ll_make();
+  compiled_t *result = NEW(compiled_t);
   {
     llist_t *s_macros = hm_free_to(macros);
     while (s_macros->data) {
@@ -1253,43 +1127,45 @@ skip:
       free(ll_shift(entry));
       llist_t *macro = ll_shift(entry);
       ll_free_val(ll_shift(macro));
-      helper_free_file(macro);
+      helper_file_free(macro);
       ll_free_val(entry);
     }
     ll_free(s_macros);
 
-    llist_t *f_sections = hm_free_to(sections);
-    E_FOR(entry, f_sections->data) {
-      llist_t *sect = ((llist_t*)entry->value)->data->next->value;
-      size_t sect_size = (size_t) ll_shift(sect);
-      void* nn1 = ll_shift(sect);
-      ll_shift(sect);
-      uint8_t *o_product = emalloc(sect_size), *product = o_product;
-      while(sect->data) {
-	llist_t *part = ll_shift(sect);
-	size_t len = (size_t) ll_shift(part);
-	uint8_t *data = part->data->value;
-	memcpy(product, data, len);
-	product += len;
-	ll_free_val(part);
+    for (size_t i=0; i < sections->capacity; i++) {
+      for (struct _lkee *entry = sections->buckets[i]; entry; entry = entry->next) {
+	_section_t *old = entry->value;
+	section_t *new = NEW(section_t);
+	entry->value = new;
+	new->expr = old->expr;
+	new->size = old->address;
+	uint8_t *product = emalloc(new->size);
+	new->data = product;
+	while(old->data->data) {
+	  llist_t *part = ll_shift(old->data);
+	  size_t len = (size_t) ll_shift(part);
+	  uint8_t *data = part->data->value;
+	  memcpy(product, data, len);
+	  product += len;
+	  ll_free_val(part);
+	}
+	
+	ll_free(old->data);
+	free(old);
       }
-      ll_append(sect, (void*)sect_size);
-      ll_append(sect, nn1);
-      ll_append(sect, o_product);
     }
 
     ll_free(files);
     ll_free_val(dl);
     ll_free(history);
-    ll_append(result, _env->symbols);
-    ll_append(result, f_sections);
+    result->symbols = _env->symbols;
+    result->sections = sections;
     free(_env->file);
     free(_env);
   }
   return result;
 }
 
-//Signature (data[file[#*symbol[address, section], sections[unwrap$[*name, section[size, symbol[address, *name, size]..., *bytecode]]...]]...])
-char *link(llist_t *data, cmpl_env *env) {
+char *link(llist_t *data, cmpl_env_t *env) {
   return 0; 
 }
