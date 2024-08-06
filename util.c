@@ -20,12 +20,12 @@ uint64_t hash(const char *str) {
 
 
 hashset_t *hs_make(void) {
-  hashset_t *res = NEW(hashset_t);
-  res->size = 0;
-  res->capacity = 8;
-  res->buckets = NEW_A(struct _lke*, 8);
-  memset(res->buckets, 0, sizeof(struct _lke*) * 8);
-  return res;
+  hashset_t *result = NEW(hashset_t);
+  result->size = 0;
+  result->capacity = 8;
+  result->buckets = NEW_A(struct _lke*, 8);
+  memset(result->buckets, 0, sizeof(struct _lke*) * 8);
+  return result;
 }
 
 uint8_t hs_contains(const hashset_t *set, const char *str) {
@@ -110,12 +110,12 @@ void hs_free_val(hashset_t *set) {
 
 
 hashmap_t *hm_make(void) {
-  hashmap_t *res = NEW(hashmap_t);
-  res->size = 0;
-  res->capacity = 8;
-  res->buckets = NEW_A(struct _lkee*, 8);
-  memset(res->buckets, 0, sizeof(struct _lkee*) * 8);
-  return res;
+  hashmap_t *result = NEW(hashmap_t);
+  result->size = 0;
+  result->capacity = 8;
+  result->buckets = NEW_A(struct _lkee*, 8);
+  memset(result->buckets, 0, sizeof(struct _lkee*) * 8);
+  return result;
 }
 
 struct _lkee *hm_get(hashmap_t *map, const char *str) {
@@ -231,11 +231,11 @@ llist_t *hm_free_to(hashmap_t *map) {
 
 
 llist_t *ll_make(void) {
-  llist_t *res = NEW(llist_t);
-  res->size = 0;
-  res->data = 0;
-  res->last = &res->data;
-  return res;
+  llist_t *result = NEW(llist_t);
+  result->size = 0;
+  result->data = 0;
+  result->last = &result->data;
+  return result;
 }
 
 void ll_append(llist_t *list, void *value) {
@@ -323,10 +323,11 @@ array_t *ll_free_to(llist_t *list) {
 
 
 array_t *ar_make(size_t size) {
-  array_t *res = NEW(array_t);
-  res->size = size;
-  res->data = NEW_A(void*, size);
-  return res;
+  if (size < 0) return 0;
+  array_t *result = NEW(array_t);
+  result->size = size;
+  result->data = NEW_A(void*, size);
+  return result;
 }
 
 void *ar_set(array_t *array, size_t index, void *value) {
@@ -344,6 +345,21 @@ void *ar_get(array_t *array, size_t index) {
 const void *ar_cget(const array_t *array, size_t index) {
   if (array->size <= index) return 0;
   return array->data[index];
+}
+
+void ar_cutout(array_t *array, size_t start, size_t end) {
+  if (array->size < end) return;
+  void **data = NEW_A(void*, (end-start));
+  for (int i = 0; i < array->size; i++) {
+    if (i < start || i >= end) {
+      free(array->data[i]);
+    } else {
+      data[i-start] = array->data[i];
+    }
+  }
+  free(array->data);
+  array->size = end-start;
+  array->data = data;
 }
 
 void ar_free(array_t *array) {

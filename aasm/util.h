@@ -91,6 +91,7 @@ array_t *ar_make(size_t size);
 void *ar_set(array_t *array, size_t index, void *value);
 void *ar_get(array_t *array, size_t index);
 const void *ar_cget(const array_t *array, size_t index);
+void ar_cutout(array_t *array, size_t start, size_t end);
 void ar_free(array_t *array);
 void ar_free_val(array_t *array);
 
