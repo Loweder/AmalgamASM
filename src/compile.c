@@ -1,21 +1,79 @@
 #include "aasm/internal/compile.h"
 
+void helper_section_link(cmpl_t *_env, section_t *section, size_t *address) {
+  llist_t *mem = ll_make();
+  ll_append(_env->section->data, mem);
+  ll_append(mem, (void*) section->size);
+  ll_append(mem, section->data);
+  section->data = 0;
+  *address = _env->section->address;
+  _env->section->address += section->size;
+}
 
-
-//.comm .lcomm .globl LT
-
-//Signature convention:
-// literal 	= ["*"] , ("word" | "f_line")
-// array 	= name , "[" , signature , {", " , signature} , "]"
-// set 		= "%" , name , "[" , literal , "]"
-// map 		= "#", ["*"] , array
-// signature 	= (array | set | map | literal) , ["..."]
-// "..." means "0 or more"
-// "*" means "needs to be freed". In case of hashmap, key needs to be freed
-// TODO update signatures
+void _parse_linker(array_t *args, cmpl_t *_env, hashmap_t *files, hashmap_t *linked) {
+  ERR_BETWEEN(1, 2, "Linker 'file'",);
+  if (!strcmp(ARG(0), "*")) {
+    for (size_t i = 0; i < files->capacity; i++) {
+      for (struct _lkee *f_entry = files->buckets[i]; f_entry; f_entry = f_entry->next) {
+	compiled_t *file = f_entry->value;
+	if (args->size == 1) {
+	  for (size_t j = 0; j < file->sections->capacity; j++) {
+	    for (struct _lkee *s_entry = file->sections->buckets[j]; s_entry; s_entry = s_entry->next) {
+	      section_t *section = s_entry->value;
+	      if (!section->data) 
+		continue;
+	      size_t address;
+	      helper_section_link(_env, section, &address);
+	      if (!hm_get(linked, f_entry->str))
+		hm_put(linked, f_entry->str, hm_make());
+	      hm_put(hm_get(linked, f_entry->str)->value, s_entry->str, (void*) address);
+	    }
+	  }
+	} else if (hm_get(file->sections, ARG(1))) {
+	  section_t *section = hm_get(file->sections, ARG(1))->value;
+	  if (!section->data) 
+	    continue;
+	  size_t address;
+	  helper_section_link(_env, section, &address);
+	  if (!hm_get(linked, f_entry->str))
+	    hm_put(linked, f_entry->str, hm_make());
+	  hm_put(hm_get(linked, f_entry->str)->value, ARG(1), (void*) address);
+	}
+      }
+    }
+  } else if (hm_get(files, ARG(0))) {
+    compiled_t *file = hm_get(files, ARG(0))->value;
+    if (args->size == 1) {
+      for (size_t i = 0; i < file->sections->capacity; i++) {
+	for (struct _lkee *s_entry = file->sections->buckets[i]; s_entry; s_entry = s_entry->next) {
+	  section_t *section = s_entry->value;
+	  if (!section->data) 
+	    continue;
+	  size_t address;
+	  helper_section_link(_env, section, &address);
+	  if (!hm_get(linked, ARG(0)))
+	    hm_put(linked, ARG(0), hm_make());
+	  hm_put(hm_get(linked, ARG(0))->value, s_entry->str, (void*) address);
+	}
+      }
+    } else if (hm_get(file->sections, ARG(1))) {
+      section_t *section = hm_get(file->sections, ARG(1))->value;
+      if (!section->data) 
+	ERR("Linker error: section already linked",);
+      size_t address;
+      helper_section_link(_env, section, &address);
+      if (!hm_get(linked, ARG(0)))
+	hm_put(linked, ARG(0), hm_make());
+      hm_put(hm_get(linked, ARG(0))->value, ARG(1), (void*) address);
+    } else {
+      ERR("Linker error: section not found",);
+    }
+  } else {
+    ERR("Linker error: file not found",);
+  }
+}
 
 compiled_t *compile(const char *orig, cmpl_env_t *env) {
-  //TODO '.' special symbol
   cmpl_t *const _env = NEW(cmpl_t);
   hashmap_t *const macros = hm_make(), *const sections = hm_make();
   llist_t *const files = ll_make(), *dl = ll_make(), *const history = ll_make();
@@ -49,9 +107,8 @@ skip:
 	  if (strchr(word, '\0') - strchr(word, ':') != 1) break;
 	  STRMAKE(strlen(word) - 1, symbol, word);
 	  struct _lkee *old = hm_get(_env->symbols, symbol);
-	  if (!old || ((symbol_t*)old->value)->section == 0) {
+	  if (!old || ((symbol_t*)old->value)->section == 0)
 	    helper_symbol_set(_env, _env->section->name, symbol, _env->section->address);
-	  }
 	  free(symbol);
 	}
 	if (i >= args->size) {
@@ -78,24 +135,20 @@ skip:
 	    else if (!strcmp(word, ".double"))	_parse_double(args, _env);
 	    else if (!strcmp(word, ".ascii"))	_parse_ascii(args, _env);
 	    else if (!strcmp(word, ".asciz"))	_parse_asciz(args, _env);
-	    else if (!strcmp(word, ".include")) {
-	      _parse_include(args, _env, files);
-	      ar_free_val(args);
-	      free(word);
-	      goto skip;
-	    } else if (!strcmp(word, ".err")) 	_parse_err(args, _env);
-	    else if (!strcmp(word, ".ifdef")) 	_parse_ifdef(args, _env, history, dl);
-	    else if (!strcmp(word, ".ifndef")) 	_parse_ifndef(args, _env, history, dl);
-	    else if (!strcmp(word, ".if"))	_parse_if(args, _env, history, dl);
-	    else if (!strcmp(word, ".macro")) { _parse_macro(args, _env, dl); ll_prepend(history, "m"); } 
-	    else if (!strcmp(word, ".irp")) { 	_parse_irp(args, _env, dl); ll_prepend(history, "rn"); }
-	    else if (!strcmp(word, ".irpc")) { 	_parse_irpc(args, _env, dl); ll_prepend(history, "rc"); }
 	    else if (!strcmp(word, ".skip")) 	_parse_skip(args, _env);
 	    else if (!strcmp(word, ".fill")) 	_parse_fill(args, _env);
 	    else if (!strcmp(word, ".align")) 	_parse_align(args, _env);
 	    else if (!strcmp(word, ".org")) 	_parse_org(args, _env);
 	    else if (!strcmp(word, ".equ")) 	_parse_equ(args, _env);
 	    else if (!strcmp(word, ".equiv")) 	_parse_equiv(args, _env);
+	    else if (!strcmp(word, ".include")){_parse_include(args, _env, files); goto skip1; }
+	    else if (!strcmp(word, ".err")) 	_parse_err(args, _env);
+	    else if (!strcmp(word, ".ifdef")) 	_parse_ifdef(args, _env, history, dl);
+	    else if (!strcmp(word, ".ifndef")) 	_parse_ifndef(args, _env, history, dl);
+	    else if (!strcmp(word, ".if"))	_parse_if(args, _env, history, dl);
+	    else if (!strcmp(word, ".macro")) { _parse_macro(args, _env, dl); ll_prepend(history, "m"); } 
+	    else if (!strcmp(word, ".irp")) { 	_parse_irp(args, _env, dl); ll_prepend(history, "rn"); }
+	    else if (!strcmp(word, ".irpc")) { 	_parse_irpc(args, _env, dl); ll_prepend(history, "rc"); }
 	    else if (!strcmp(word, ".section")) { 
 	      ERR_ONLY(1, ".section",0);
 	      if (*((const char*)ARG(0)) != '.') ERR(".section operand must start from '.'",0);
@@ -111,12 +164,8 @@ skip:
 	  }
 	} else {
 	  {
-	    if (hm_get(macros, word)) {
-	      _parse_macro_sub(args, _env, hm_get(macros, word)->value, files);
-	      free(word);
-	      ar_free_val(args);
-	      goto skip;
-	    } else if (!strcmp(word, "nop")) _parsei_pure(args, _env, I_NOP);
+	    if (hm_get(macros, word)) { _parse_macro_sub(args, _env, hm_get(macros, word)->value, files); goto skip1; }
+	    else if (!strcmp(word, "nop")) _parsei_pure(args, _env, I_NOP);
 	    else if (!strcmp(word, "sleep")) _parsei_1reg_imm(args, _env, I_SLEEP, I_SLEEPI);
 	    else if (!strcmp(word, "gipc")) _parsei_1reg(args, _env, I_GIPC);
 	    else if (!strcmp(word, "mov")) _parsei_2reg_imm(args, _env, I_MOV, I_MOVI);
@@ -130,12 +179,12 @@ skip:
 	    else if (!strcmp(word, "mod")) _parsei_2reg(args, _env, I_MOD);
 	    else if (!strcmp(word, "inc")) _parsei_1reg(args, _env, I_INC);
 	    else if (!strcmp(word, "dec")) _parsei_1reg(args, _env, I_DEC);
-	    else if (!strcmp(word, "fadd")) _parsei_2reg(args, _env, I_FADD);
-	    else if (!strcmp(word, "fsub")) _parsei_2reg(args, _env, I_FSUB);
-	    else if (!strcmp(word, "fmul")) _parsei_2reg(args, _env, I_FMUL);
-	    else if (!strcmp(word, "fdiv")) _parsei_2reg(args, _env, I_FDIV);
-	    else if (!strcmp(word, "i2f")) _parsei_2reg(args, _env, I_I2F);
-	    else if (!strcmp(word, "f2i")) _parsei_2reg(args, _env, I_F2I);
+	    else if (!strcmp(word, "fadd")) _parsei_2reg(args, _env, IC_FADD);
+	    else if (!strcmp(word, "fsub")) _parsei_2reg(args, _env, IC_FSUB);
+	    else if (!strcmp(word, "fmul")) _parsei_2reg(args, _env, IC_FMUL);
+	    else if (!strcmp(word, "fdiv")) _parsei_2reg(args, _env, IC_FDIV);
+	    else if (!strcmp(word, "i2f")) _parsei_2reg(args, _env, IC_I2F);
+	    else if (!strcmp(word, "f2i")) _parsei_2reg(args, _env, IC_F2I);
 	    else if (!strcmp(word, "xor")) _parsei_2reg_imm(args, _env, I_XOR, I_XORI);
 	    else if (!strcmp(word, "or")) _parsei_2reg_imm(args, _env, I_OR, I_ORI);
 	    else if (!strcmp(word, "and")) _parsei_2reg_imm(args, _env, I_AND, I_ANDI);
@@ -201,6 +250,11 @@ skip:
 	}
 	free(word);
 	ar_free_val(args);
+	continue;
+skip1:
+	free(word);
+	ar_free_val(args);
+	goto skip;
       } else {
 	size_t i = 0;
 	for (; i < args->size; i++) {
@@ -296,45 +350,72 @@ skip:
   return result;
 }
 
-/*char *link(llist_t *data, cmpl_env_t *env) {
-  llist_t *linker = helper_file_lex(ll_shift(data), env);
-  _env->file = ll_shift(linker);
-  _env->f_line = (size_t) ll_shift(linker);
+char *link(llist_t *data, cmpl_env_t *env) {
+  cmpl_t *const _env = NEW(cmpl_t);
+  llist_t *linker = helper_file_parse(ll_shift(data), env);
+  hashmap_t *files = ll_shift(data), *linked = hm_make();
+
+  {
+    _env->env = env;
+    _env->file = ll_shift(linker);
+    _env->f_line = (size_t) ll_shift(linker);
+    _env->symbols = hm_make();
+    _env->section = NEW(_section_t);
+    _env->section->address = 0;
+    _env->section->name = ".linker";
+    _env->section->bitness = 0;
+    _env->section->data = ll_make();
+    _env->section->expr = ll_make();
+  }
+
   while (linker->data) {
-    llist_t *const line = ll_shift(linker);
+    array_t *const args = ll_shift(linker);
     _env->f_line++;
-    char *word = ll_shift(line);
-    while (word && strchr(word, '\0') - strchr(word, ':') == 1) {
+    size_t i = 0;
+    for (; i < args->size; i++) {
+      const char *word = ar_cget(args, i);
+      if (strchr(word, '\0') - strchr(word, ':') != 1) break;
       STRMAKE(strlen(word) - 1, symbol, word);
-      free(word);
       struct _lkee *old = hm_get(_env->symbols, symbol);
       if (!old || ((symbol_t*)old->value)->section == 0) {
 	helper_symbol_set(_env, _env->section->name, symbol, _env->section->address);
       }
       free(symbol);
-      word = ll_shift(line);
     }
-    if (!word) {
-      ll_free_val(line);
+    if (i >= args->size) {
+      ar_free_val(args);
       continue;
     }
-    array_t *args = ll_free_to(line);
+    STRMAKE(strlen(ar_cget(args, i)),word,ar_cget(args, i));
+    ar_cutout(args, i+1, args->size);
 
     if (strchr(word, '=')) {
       {
 	char *delim = strchr(word, '=');
 	STRMAKE(delim-word,symbol,word);
-	helper_symbol_set(_env, "absolute", symbol, helper_symbol_expr(_env, delim+1, 0, 0));
+	helper_symbol_set(_env, "absolute", symbol, helper_expr_parse(_env, delim+1, 0, 0));
 	free(symbol);
       }
     } else if (*word == '.') {
       {
-	if (!strcmp(word, ".byte")) 	_parse_int(args, _env, 1);
-	else ERR("Unknown directive",0);
+	if (!strcmp(word, ".byte")) 		_parse_int(args, _env, 1);
+	else if (!strcmp(word, ".short")) 	_parse_int(args, _env, 2);
+	else if (!strcmp(word, ".int")) 	_parse_int(args, _env, 4);
+	else if (!strcmp(word, ".long")) 	_parse_int(args, _env, 8);
+	else if (!strcmp(word, ".float"))	_parse_float(args, _env);
+	else if (!strcmp(word, ".double"))	_parse_double(args, _env);
+	else if (!strcmp(word, ".ascii"))	_parse_ascii(args, _env);
+	else if (!strcmp(word, ".asciz"))	_parse_asciz(args, _env);
+	else if (!strcmp(word, ".skip")) 	_parse_skip(args, _env);
+	else if (!strcmp(word, ".fill")) 	_parse_fill(args, _env);
+	else if (!strcmp(word, ".align")) 	_parse_align(args, _env);
+	else if (!strcmp(word, ".org")) 	_parse_org(args, _env);
+	else if (!strcmp(word, ".equ")) 	_parse_equ(args, _env);
+	else ERR("Invalid directive",0);
       }
     } else {
       {
-	if (!strcmp(word, "nop")) _parsei_pure(args, _env, I_NOP);
+	if (!strcmp(word, "file")) _parse_linker(args, _env, files, linked);
 	else ERR("Invalid instruction",0);
       }
     }
@@ -342,4 +423,4 @@ skip:
     ar_free_val(args);
   }
   ll_free(linker);
-}*/
+}

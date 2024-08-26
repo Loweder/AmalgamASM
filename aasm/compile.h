@@ -18,6 +18,7 @@ typedef struct {
 typedef struct {
   size_t address;
   size_t size;
+  size_t offset;
   char *expression;
 } expr_info_t;
 

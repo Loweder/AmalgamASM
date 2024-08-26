@@ -77,6 +77,7 @@ int main(void) {
     symbol_t *symbol = l_entry->data->next->value;
     printf("Symbol '%s'. Section '%s', value '0x%lx', global '%d'\n", (char*) l_entry->data->value, symbol->section, symbol->value, symbol->global);
   }
+  printf("\n");
 
   E_FOR(entry, sections->data) {
     printf("Section '%s'\n", (char*)((llist_t*)entry->value)->data->value);
@@ -92,13 +93,18 @@ int main(void) {
       if (!((i+1) % 32)) printf("\n");
     }
     if (section->size % 32) printf("\n");
+    printf("Requests:\n");
+    E_FOR(req_entry, section->expr->data) {
+      expr_info_t *request = req_entry->value;
+      printf("Expression '%s'. At '0x%lx' of size %ld\n", request->expression, request->address, request->size);
+    }
     printf("\n");
   }
   return 0;
 }
 
 int main_i(void) {
-  hw *system = build_system(&device);
+  hw_t *system = build_system(&device);
 
   if (!(system->status & HW_RUNNING)) {
     printf("System build failed: %X\n", system->status);
@@ -107,7 +113,7 @@ int main_i(void) {
   while (1) {
     printf(DELIM "System State:\n");
     for (int i = 0; i < system->cpu_count; i++) {
-      cpu *core = system->cpus + i;
+      cpu_t *core = system->cpus + i;
       printf(DELIM "Core %i:\nR1: %8lX | R2: %8lX | R3: %8lX | R4: %8lX | R5: %8lX | R6: %8lX | R7: %8lX | R8: %8lX\n\
 R9: %8lX | 10: %8lX | 11: %8lX | 12: %8lX | 13: %8lX | BP: %8lX | SP: %8lX | IP: %8lX\n\n\
 ALU: %8X | MODE: %8X | MTASK: %8X | INT: %8X | PAGING: %8X | PAGE-F: %8X\n", i, 

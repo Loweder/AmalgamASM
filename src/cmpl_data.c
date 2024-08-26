@@ -27,8 +27,7 @@ void helper_symbol_set(cmpl_t *_env, const char *section, const char *name, size
     size_t *addr_ptr = &_env->section->address;
     size_t needed = value - *addr_ptr;
     if (value > *addr_ptr) {
-      int8_t *o_mem = helper_insn_add(_env->section, needed);
-      memset(o_mem, 0, needed);
+      memset(helper_insn_add(_env->section, needed), 0, needed);
       *addr_ptr += needed;
     }
     return;

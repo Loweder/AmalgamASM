@@ -1,18 +1,18 @@
 PREFIX = /usr/local
 
-INCS =
-LIBS =
+INCS = -I.
+LIBS = -lc
 
 CPPFLAGS = -D_DEFAULT_SOURCE -D_BSD_SOURCE -D_POSIX_C_SOURCE=200809L
 CFLAGS   = -fPIC -std=c99 -pedantic -Wall -Wno-deprecated-declarations -g ${INCS} ${CPPFLAGS}
 LDFLAGS  = ${LIBS} -shared
-TEST_FLAGS  = -I. -L. -laasm -Wl,-rpath=.
+TEST_FLAGS  = -L. -laasm -Wl,-rpath=.
 
 CC = cc
 LD = ld
 
-SRC = $(wildcard *.c)
-OBJ = ${SRC:%.c=%.o}
+SRC = $(shell find src/ -type f -name '*.c')
+OBJ = $(SRC:src/%.c=build/%.o)
 EXE = libaasm.so
 TEST_SRC = $(wildcard test/*.c)
 TEST_EXE = $(TEST_SRC:test/%.c=test/%.o)
@@ -33,7 +33,7 @@ test: ${TEST_EXE}
 test/%.o: test/%.c
 	${CC} ${CFLAGS} -o $@ $< ${TEST_FLAGS}
 
-%.o: %.c
+build/%.o: src/%.c
 	${CC} ${CFLAGS} -c -o $@ $<
 
 ${EXE}: ${OBJ}
@@ -41,8 +41,8 @@ ${EXE}: ${OBJ}
 
 clean:
 	rm -f ${EXE} 
-	rm -f *.o 
-	rm -f test/*.o
-	rm -f test/*.log 
+	rm -f ${OBJ}
+	rm -f ${TEST_EXE}
+	rm -f $(TEST_EXE:%.o=%.log) 
 
 .PHONY: all clean test

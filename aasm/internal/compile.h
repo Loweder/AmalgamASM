@@ -15,22 +15,6 @@
 #define STRCPY(size, to, from) to = emalloc((size)+1); memcpy(to, from, size); to[size] = '\0';
 #define STRMAKE(size, to, from) char *to = emalloc((size)+1); memcpy(to, from, size); to[size] = '\0';
 
-typedef union _expr_t {
-  enum expr_type {
-    EXPR_NORM, EXPR_UNARY, EXPR_LIT
-  } type;
-  struct _expr_norm_t {
-    enum expr_type type;
-    uint8_t precedence;
-    char operand;
-    union _expr_t *a;
-    union _expr_t *b;
-  } norm;
-  struct _expr_lit_t {
-    enum expr_type type;
-    char *literal;
-  } lit;
-} expr_t;
 typedef struct {
   char *name;
   size_t address;  
