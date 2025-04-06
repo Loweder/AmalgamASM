@@ -7,12 +7,9 @@
  * FIXME Makefile, properly use LD (currently invalid)
  * TODO Redesign
  * Test mmu_* functions, specifically test edge cases
- * Add cache to Complex processors, and add heavy penalty on memory reads
  * Other: make realistic GPUs. Also make a 4D minesweeper for it, cus why not?
  * Make "cooldown" field in CPUs, and allow it to be incremented dynamically.
- * Make memory access have long cooldown
  * Add "REPEAT" prefix (label: insn; DEC %r1; JNZ label;), and FLAGS to INC and DEC
- * Change system from "execute first, wait later" to "wait first, execute later". Applied to IO and RAM access
  * More ALU flags
  * TODO add more states
  * TODO detach and attach 'io's from 'hw'
@@ -31,7 +28,7 @@
 typedef struct device_t device_t;
 typedef struct system_t system_t;
 
-typedef void (*exec)(device_t *s, device_t *dev);
+typedef void (*exec_t)(device_t *s, device_t *dev);
 
 enum {
   STATUS_RUNNING = 0x01,	//Device is running
@@ -40,7 +37,7 @@ enum {
 struct device_t { //Devices must contain "device_t basic" as their first field
   uint32_t status;	//Device status
   uint32_t freq_mod;	//System counter modulo
-  exec executor;	//Device manager
+  exec_t executor;	//Device manager
   device_t **devices;	//Children list
   uint8_t device_count;	//Children count
   uint8_t freq_div;	//Firmware-managed counter divider

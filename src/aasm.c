@@ -1,6 +1,6 @@
 #include "aasm/aasm.h"
 
-static void execute_device(device_t *parent, device_t *device, uint32_t counter, const uint8_t root) {
+static inline void execute_device(device_t *parent, device_t *device, uint32_t counter, const uint8_t root) {
   if (device->status & STATUS_RUNNING) {
     for (uint8_t i = 0; i < device->device_count; i++) {
       execute_device(device, device->devices[i], counter, 0);

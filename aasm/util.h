@@ -54,7 +54,7 @@ struct _fa {
   void **data;
 };
 
-void *emalloc(size_t size);
+void *emalloc(size_t size) __attribute_malloc__;
 uint64_t hash(const char *str);
 
 hashset_t *hs_make(void);

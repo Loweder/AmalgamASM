@@ -1,34 +1,31 @@
 #include <aasm/kyanite/instruction.h>
 #include <aasm/kyanite/interrupt.h>
-#include <aasm/kyanite/mmu.h>
 
 #include <string.h>
 
-void kyanite_timer_executor(device_t *parent, kyanite_timer_t *timer) {
+#define WIDTH_MASK(val, width) (val & ((1 << width) - 1))
 
-}
-void kyanite_ram_executor(kyanite_board_t *s, kyanite_ram_t *ram) {
-  
-}
-uint8_t kyanite_ram_io_proc(kyanite_ram_t *dev, uint32_t addr, uint8_t size, uint64_t *value, uint8_t mode) {
-  if (dev->size < addr + size || (dev->size <= addr && (mode & MMU_EXEC))) return 1;
-  if (mode & MMU_WRITE) {
-    memcpy(dev->data + addr, value, size);
-  } else {
-    *value = 0;
-    if (mode & MMU_EXEC)
-      memcpy(value, dev->data + addr, dev->size < addr + size ? dev->size - addr : size);
-    else
-      memcpy(value, dev->data + addr, size);
-  }
-  return 0;
-}
+#define ST(name) (STATUS_KYANITE_ ## name)
+#define ST_SET(dev, name) (dev).status |= ST(name);
+#define ST_UNSET(dev, name) (dev).status &= ~ST(name);
+#define ST_TEST(dev, name) (ST(name) & (dev).status)
 
+#define BUS_RESP(dev, core, type, value) \
+  if (ST_TEST(*dev, IO_OUTPUT)) return; \
+  ST_SET(*dev, IO_ ## type); dev->bus_out = value; dev->bus_ocore = core;
+#define BUS_REQ(dev, core, type, address, value) \
+  if (ST_TEST(*dev, IO_INPUT)) return; \
+  ST_SET(*dev, IO_ ## type); dev->bus_in = value; dev->bus_icore = core; dev->bus_address = address;
+#define BUS_RESPM(dev, core, type, value) \
+  if (ST_TEST(*dev, IO_OUTPUT)) return; \
+  dev->status |= type; dev->bus_out = value; dev->bus_ocore = core;
+#define BUS_REQM(dev, core, type, address, value) \
+  if (ST_TEST(*dev, IO_INPUT)) return; \
+  dev->status |= type; dev->bus_in = value; dev->bus_icore = core; dev->bus_address = address;
+
+/*
 #define IS_COMPLEX (core->basic.status & STATUS_KYANITE_CPU_COMPLEX)
 
-#define ASSERT_VOID(condition) if (condition) return;
-#define ASSERT_PASS(condition) if (condition) return 1;
-#define ASSERT_INT(type, condition) if (condition) INTERRUPT(type);
 #define ASSERT_SPEC(task, condition) if (condition) { task }
 #define INTERRUPT(type) { if (!(task & MMU_SYSRD)) interrupt(s, core, INT_ ## type); return 1; }
 
@@ -42,7 +39,7 @@ uint8_t mmu_io(kyanite_board_t *s, kyanite_cpu_t *core, uint16_t addr, uint8_t s
 
 }
 uint8_t mmu_ram(kyanite_board_t *s, kyanite_cpu_t *core, uint32_t addr, uint8_t size, uint64_t *data, mmu_req_t task) {
-  kyanite_io_dev_t *ram = (kyanite_io_dev_t*) s->basic.devices[KYANITE_BOARD_RAM];
+  kyanite_io_t *ram = (kyanite_io_t*) s->basic.devices[KYANITE_BOARD_RAM];
   if (IS_COMPLEX) {
     mmu_addr_t adv_addr = *(mmu_addr_t*) &addr;
     uint32_t paging = KYANITE_MSR(PAGING);
@@ -73,7 +70,7 @@ uint8_t mmu_ram(kyanite_board_t *s, kyanite_cpu_t *core, uint32_t addr, uint8_t 
       device_t *io = s->basic.devices[KYANITE_BOARD_IO];
       ASSERT_INT(IO, page_entry.device > io->device_count);
       ASSERT_INT(IO, !(io->devices[page_entry.device]->status & STATUS_KYANITE_IO_PRESENT));
-      ASSERT_INT(IO, ((kyanite_io_dev_t*)io->devices[page_entry.device])->processor(io->devices[page_entry.device], addr, size, data, task & 0x1));
+      ASSERT_INT(IO, ((kyanite_io_t*)io->devices[page_entry.device])->processor(io->devices[page_entry.device], addr, size, data, task & 0x1));
       return 0;
     }
   } else {
@@ -198,489 +195,483 @@ uint8_t insn_write_address(kyanite_board_t *s, kyanite_cpu_t *core, insn_mem_t a
 
 void kyanite_cpu_executor(kyanite_board_t *s, kyanite_cpu_t *core) {
   insn_t insn = {0};
-  if (mmu_ram(s, core, KYANITE_GPR(IP), 8, (uint64_t*) &insn, MMU_EXEC)) return;
-  ASSERT_SPEC(interrupt(s, core, INT_GP); return;, IS_COMPLEX && ((insn.pure.opcode & 0xC0) == 0xC0) && !(KYANITE_MSR(MODE) & KYANITE_MSR_MODE_KERNEL));
-  const uint8_t size = IS_COMPLEX ? 4 : 2;
-  const uint8_t bit_mask = IS_COMPLEX ? 0x3F : 0x1F;
+    if (mmu_ram(s, core, KYANITE_GPR(IP), 8, (uint64_t*) &insn, MMU_EXEC)) return;
+    ASSERT_SPEC(interrupt(s, core, INT_GP); return;, IS_COMPLEX && ((insn.pure.opcode & 0xC0) == 0xC0) && !(KYANITE_MSR(MODE) & KYANITE_MSR_MODE_KERNEL));
+    const uint8_t size = IS_COMPLEX ? 4 : 2;
+    const uint8_t bit_mask = IS_COMPLEX ? 0x3F : 0x1F;
   //TODO add sizes
   switch (insn.pure.opcode) {
-    case I_NOP:
-      break;
-    case I_SLEEP:
-      {
-	INSN_MEM_U;
-	INSN_GET_MUNI;
-	core->delay += dest;
-	core->basic.status |= STATUS_KYANITE_CPU_ASLEEP;
-	break;
-      }
-    case I_SLEEPI:
-      {
-	INSN_IMM_U;
-	core->delay += dest;
-	core->basic.status |= STATUS_KYANITE_CPU_ASLEEP;
-	break;
-      }
-    case I_GIPC:
-      {
-	INSN_MEM_U;
-	uint64_t dest = core->ip_count;
-	INSN_SET_MUNI;
-	break;
-      }
-
-    case I_MOV:
-      {
-	INSN_MEM_S;
-	INSN_GET_MSRC;
-	INSN_GET_MDEST;
-	dest = src;
-	INSN_SET_MDEST;
-	break;
-      }
-    case I_MOVI:
-      {
-	INSN_IMM_S;
-	uint64_t dest = src;
-	INSN_SET_DEST;
-	break;
-      }
-    case I_SWAP:
-      { //Requires special handling
-	INSN_GET_SRC;
-	INSN_GET_DEST;
-	core->gpr[insn.reg.reg1] = src;
-	core->gpr[insn.reg.reg2] = dest;
-	break;
-      }
-    case I_PUSH:
-      {
-	INSN_GET_DEST;
-	ASSERT_VOID(mmu_ram(s, core, KYANITE_GPR(SP) -= size, size, &dest, MMU_WRITE));
-	break;
-      }
-    case I_POP:
-      {
-	uint64_t dest = 0;
-	ASSERT_VOID(mmu_ram(s, core, KYANITE_GPR(SP), size, &dest, MMU_READ));
-	INSN_SET_DEST;
-	KYANITE_GPR(SP) += size;
-	break;
-      }
-
-    case I_ADD:
-      {
-	INSN_MEM_S;
-	INSN_GET_MSRC;
-	INSN_GET_MDEST;
-	dest += src;
-	INSN_SET_MDEST;
-	break;
-      }
-    case I_ADI:
-      {
-	INSN_IMM_S;
-	INSN_GET_DEST;
-	dest += src;
-	INSN_SET_DEST;
-	break;
-      }
-    case I_SUB:
-      {
-	INSN_MEM_S;
-	INSN_GET_MSRC;
-	INSN_GET_MDEST;
-	dest -= src;
-	INSN_SET_MDEST;
-	break;
-      }
-    case I_SBI:
-      {
-	INSN_IMM_S;
-	INSN_GET_DEST;
-	dest -= src;
-	INSN_SET_DEST;
-	break;
-      }
-
-    case I_MUL:
-      {
-	INSN_MEM_S;
-	INSN_GET_MSRC;
-	INSN_GET_MDEST;
-	dest *= src;
-	INSN_SET_MDEST;
-	break;
-      }
-    case I_DIV:
-      {
-	INSN_MEM_S;
-	INSN_GET_MSRC;
-	INSN_GET_MDEST;
-	ASSERT_SPEC(interrupt(s, core, INT_DV); return;, !src);
-	dest /= src;
-	INSN_SET_MDEST;
-	break;
-      }
-    case I_MOD:
-      {
-	INSN_MEM_S;
-	INSN_GET_MSRC;
-	INSN_GET_MDEST;
-	ASSERT_SPEC(interrupt(s, core, INT_DV); return;, !src);
-	dest %= src;
-	INSN_SET_MDEST;
-	break;
-      }
-    case I_INC:
-      {
-	INSN_MEM_U;
-	INSN_GET_MUNI;
-	dest++;
-	INSN_SET_MUNI;
-	break;
-      }
-    case I_DEC:
-      {
-	INSN_MEM_U;
-	INSN_GET_MUNI;
-	dest--;
-	INSN_SET_MUNI;
-	break;
-      }
-
-    case I_XOR:
-      {
-	INSN_MEM_S;
-	INSN_GET_MSRC;
-	INSN_GET_MDEST;
-	dest ^= src;
-	INSN_SET_MDEST;
-	break;
-      }
-    case I_XORI:
-      {
-	INSN_IMM_S;
-	INSN_GET_DEST;
-	dest ^= src;
-	INSN_SET_DEST;
-	break;
-      }
-    case I_OR:
-      {
-	INSN_MEM_S;
-	INSN_GET_MSRC;
-	INSN_GET_MDEST;
-	dest |= src;
-	INSN_SET_MDEST;
-	break;
-      }
-    case I_ORI:
-      {
-	INSN_IMM_S;
-	INSN_GET_DEST;
-	dest |= src;
-	INSN_SET_DEST;
-	break;
-      }
-    case I_AND:
-      {
-	INSN_MEM_S;
-	INSN_GET_MSRC;
-	INSN_GET_MDEST;
-	dest &= src;
-	INSN_SET_MDEST;
-	break;
-      }
-    case I_ANDI:
-      {
-	INSN_IMM_S;
-	INSN_GET_DEST;
-	dest &= src;
-	INSN_SET_DEST;
-	break;
-      }
-    case I_NOT:
-      {
-	INSN_MEM_U;
-	INSN_GET_MUNI;
-	dest = ~dest;
-	INSN_SET_MUNI;
-	break;
-      }
-
-    case I_BTS:
-      {
-	INSN_MEM_S;
-	INSN_GET_MSRC;
-	INSN_GET_MDEST;
-	dest |= (1 << (src & bit_mask));
-	INSN_SET_MDEST;
-	break;
-      }
-    case I_BTSI:
-      {
-	INSN_IMM_S;
-	INSN_GET_DEST;
-	dest |= (1 << (src & bit_mask));
-	INSN_SET_DEST;
-	break;
-      }
-    case I_BTR:
-      {
-	INSN_MEM_S;
-	INSN_GET_MSRC;
-	INSN_GET_MDEST;
-	dest &= ~(1 << (src & bit_mask));
-	INSN_SET_MDEST;
-	break;
-      }
-    case I_BTRI:
-      {
-	INSN_IMM_S;
-	INSN_GET_DEST;
-	dest &= ~(1 << (src & bit_mask));
-	INSN_SET_DEST;
-	break;
-      }
-    case I_BTC:
-      {
-	INSN_MEM_S;
-	INSN_GET_MSRC;
-	INSN_GET_MDEST;
-	dest ^= (1 << (src & bit_mask));
-	INSN_SET_MDEST;
-	break;
-      }
-    case I_BTCI:
-      {
-	INSN_IMM_S;
-	INSN_GET_DEST;
-	dest ^= (1 << (src & bit_mask));
-	INSN_SET_DEST;
-	break;
-      }
-
-    case I_SHL:
-      {
-	INSN_MEM_S;
-	INSN_GET_MSRC;
-	INSN_GET_MDEST;
-	dest <<= (src & bit_mask);
-	INSN_SET_MDEST;
-	break;
-      }
-    case I_SHLI:
-      {
-	INSN_IMM_S;
-	INSN_GET_DEST;
-	dest <<= (src & bit_mask);
-	INSN_SET_DEST;
-	break;
-      }
-    case I_SHR:
-      {
-	INSN_MEM_S;
-	INSN_GET_MSRC;
-	INSN_GET_MDEST;
-	dest >>= (src & bit_mask);
-	INSN_SET_MDEST;
-	break;
-      }
-    case I_SHRI:
-      {
-	INSN_IMM_S;
-	INSN_GET_DEST;
-	dest >>= (src & bit_mask);
-	INSN_SET_DEST;
-	break;
-      }
-    case I_ROL:
-      {
-	INSN_MEM_S;
-	INSN_GET_MSRC;
-	INSN_GET_MDEST;
-	dest = (dest >> ((size << 4) - (src & bit_mask))) | (dest << (src & bit_mask));
-	INSN_SET_MDEST;
-	break;
-      }
-    case I_ROLI:
-      {
-	INSN_IMM_S;
-	INSN_GET_DEST;
-	dest = (dest >> ((size << 4) - (src & bit_mask))) | (dest << (src & bit_mask));
-	INSN_SET_DEST;
-	break;
-      }
-    case I_ROR:
-      {
-	INSN_MEM_S;
-	INSN_GET_MSRC;
-	INSN_GET_MDEST;
-	dest = (dest << ((size << 4) - (src & bit_mask))) | (dest >> (src & bit_mask));
-	INSN_SET_MDEST;
-	break;
-      }
-    case I_RORI:
-      {
-	INSN_IMM_S;
-	INSN_GET_DEST;
-	dest = (dest << ((size << 4) - (src & bit_mask))) | (dest >> (src & bit_mask));
-	INSN_SET_DEST;
-	break;
-      }
-
-    case I_INT: 
-      {
-	KYANITE_GPR(IP) += size + 1;
-	INSN_IMM_U;
-	interrupt(s, core, dest);
-	return;
-      }
-    case I_JMP:
-      {
-	INSN_MEM_U;
-	uint32_t address = 0;
-	ASSERT_SPEC(interrupt(s, core, INT_IL); return;, insn_decode_address(core, mem_uni, &address));
-	KYANITE_GPR(IP) = address;
-	return;
-      }
-    case I_CALL:
-      {
-	INSN_MEM_U;
-	uint32_t address = 0;
-	ASSERT_SPEC(interrupt(s, core, INT_IL); return;, insn_decode_address(core, mem_uni, &address));
-	ASSERT_VOID(mmu_ram(s, core, KYANITE_GPR(SP) -= size, size, &KYANITE_GPR(IP), MMU_WRITE));
-	KYANITE_GPR(IP) = address;
-	return;
-      }
-    case I_JC:
-      {
-	//TODO
-	uint8_t op1 = 0;//insn[1] & 0x80 ? 1 : BIT_G(MSR(ALU), (insn[1] >> 4) & 0x7);
-	uint8_t op2 = 0;//insn[1] & 0x08 ? 1 : BIT_G(MSR(ALU), insn[1] & 0x7);
-	if (op1 != op2) break;
-	INSN_MEM_U;
-	uint32_t address = 0;
-	ASSERT_SPEC(interrupt(s, core, INT_IL); return;, insn_decode_address(core, mem_uni, &address));
-	KYANITE_GPR(IP) = address;
-	return;
-      }
-    case I_JNC:
-      {
-	uint8_t op1 = 0;//insn[1] & 0x80 ? 1 : BIT_G(MSR(ALU), (insn[1] >> 4) & 0x7);
-	uint8_t op2 = 0;//insn[1] & 0x08 ? 1 : BIT_G(MSR(ALU), insn[1] & 0x7);
-	if (op1 == op2) break;
-	INSN_MEM_U;
-	uint32_t address = 0;
-	ASSERT_SPEC(interrupt(s, core, INT_IL); return;, insn_decode_address(core, mem_uni, &address));
-	KYANITE_GPR(IP) = address;
-	return;
-      }
-    case I_MOVC:
-      {
-	uint8_t op1 = 0;//insn[1] & 0x80 ? 1 : BIT_G(MSR(ALU), (insn[1] >> 4) & 0x7);
-	uint8_t op2 = 0;//insn[1] & 0x08 ? 1 : BIT_G(MSR(ALU), insn[1] & 0x7);
-	if (op1 != op2) break;
-	INSN_MEM_S;
-	INSN_GET_MSRC;
-	INSN_GET_MDEST;
-	dest = src;
-	INSN_SET_MDEST;
-	break;
-      }
-    case I_MOVNC:
-      {
-	uint8_t op1 = 0;//insn[1] & 0x80 ? 1 : BIT_G(MSR(ALU), (insn[1] >> 4) & 0x7);
-	uint8_t op2 = 0;//insn[1] & 0x08 ? 1 : BIT_G(MSR(ALU), insn[1] & 0x7);
-	if (op1 == op2) break;
-	INSN_MEM_S;
-	INSN_GET_MSRC;
-	INSN_GET_MDEST;
-	dest = src;
-	INSN_SET_MDEST;
-	break;
-      }
-    case I_RET:
-      {
-	ASSERT_VOID(mmu_ram(s, core, KYANITE_GPR(SP), size, &KYANITE_GPR(IP), MMU_READ));
-	KYANITE_GPR(SP) += size;
-	return;
-      }
-
-    case I_IN:
-      {
-	INSN_MEM_S;
-	INSN_GET_MSRC;
-	uint64_t dest = 0;
-	mmu_io(s, core, src, size << insn.mem.extended, &dest, MMU_READ);
-	INSN_SET_MDEST;
-	break;
-      }
-    case I_INI:
-      {
-	INSN_IMM_S;
-	uint64_t dest = 0;
-	mmu_io(s, core, src, size << insn.reg.extended, &dest, MMU_READ);
-	INSN_SET_DEST;
-	break;
-      }
-    case I_OUT:
-      {
-	INSN_MEM_S;
-	INSN_GET_MSRC;
-	INSN_GET_MDEST;
-	mmu_io(s, core, dest, size << insn.mem.extended, &src, MMU_WRITE);
-	break;
-      }
-    case I_OUTI:
-      {
-	INSN_IMM_S;
-	INSN_GET_DEST;
-	mmu_io(s, core, dest, size << insn.reg.extended, &src, MMU_WRITE);
-	break;
-      }
-    case I_CRLD:
-      {
-	uint64_t dest = core->msr[insn.reg.reg2];
-	INSN_SET_DEST;
-	break;
-      }
-    case I_CRST:
-      {
-	INSN_GET_SRC;
-	core->msr[insn.reg.reg1] = src;
-	break;
-      }
-
-    case I_SEI:
-      {
-	KYANITE_MSR(ALU) |= KYANITE_MSR_ALU_IF;
-	break;
-      }
-    case I_CLI:
-      {
-	KYANITE_MSR(ALU) &= !KYANITE_MSR_ALU_IF;
-	break;
-      }
-    case I_IRET:
-      {
-	ASSERT_VOID(mmu_ram(s, core, KYANITE_GPR(SP), size, &KYANITE_GPR(IP), MMU_READ));
-	KYANITE_GPR(SP) += size;
-	if (IS_COMPLEX) {
-	  if (KYANITE_MSR(INT) & KYANITE_MSR_INT_KERNEL) KYANITE_MSR(MODE) |= KYANITE_MSR_MODE_KERNEL;
-	  else KYANITE_MSR(MODE) &= ~KYANITE_MSR_MODE_KERNEL;
-	}
-	return;
-      }
-    default:
-      interrupt(s, core, INT_IL);
-      return;
+  case I_NOP:
+  break;
+  case I_SLEEP:
+  {
+  INSN_MEM_U;
+  INSN_GET_MUNI;
+  core->delay += dest;
+  core->basic.status |= STATUS_KYANITE_CPU_ASLEEP;
+  break;
   }
-}
-void kyanite_board_executor(data_t *empty, kyanite_board_t *s) {
+  case I_SLEEPI:
+  {
+  INSN_IMM_U;
+  core->delay += dest;
+  core->basic.status |= STATUS_KYANITE_CPU_ASLEEP;
+  break;
+  }
+  case I_GIPC:
+  {
+  INSN_MEM_U;
+  uint64_t dest = core->ip_count;
+  INSN_SET_MUNI;
+  break;
+  }
 
-}
-void kyanite_io_executor(kyanite_board_t *s, kyanite_io_t *io) {
+  case I_MOV:
+  {
+  INSN_MEM_S;
+  INSN_GET_MSRC;
+  INSN_GET_MDEST;
+  dest = src;
+  INSN_SET_MDEST;
+  break;
+  }
+  case I_MOVI:
+  {
+  INSN_IMM_S;
+  uint64_t dest = src;
+  INSN_SET_DEST;
+  break;
+  }
+  case I_SWAP:
+  { //Requires special handling
+  INSN_GET_SRC;
+  INSN_GET_DEST;
+  core->gpr[insn.reg.reg1] = src;
+  core->gpr[insn.reg.reg2] = dest;
+  break;
+  }
+  case I_PUSH:
+  {
+  INSN_GET_DEST;
+  ASSERT_VOID(mmu_ram(s, core, KYANITE_GPR(SP) -= size, size, &dest, MMU_WRITE));
+  break;
+  }
+  case I_POP:
+  {
+  uint64_t dest = 0;
+  ASSERT_VOID(mmu_ram(s, core, KYANITE_GPR(SP), size, &dest, MMU_READ));
+  INSN_SET_DEST;
+  KYANITE_GPR(SP) += size;
+  break;
+  }
 
+  case I_ADD:
+    {
+      INSN_MEM_S;
+      INSN_GET_MSRC;
+      INSN_GET_MDEST;
+      dest += src;
+      INSN_SET_MDEST;
+      break;
+    }
+  case I_ADI:
+    {
+      INSN_IMM_S;
+      INSN_GET_DEST;
+      dest += src;
+      INSN_SET_DEST;
+      break;
+    }
+  case I_SUB:
+    {
+      INSN_MEM_S;
+      INSN_GET_MSRC;
+      INSN_GET_MDEST;
+      dest -= src;
+      INSN_SET_MDEST;
+      break;
+    }
+  case I_SBI:
+    {
+      INSN_IMM_S;
+      INSN_GET_DEST;
+      dest -= src;
+      INSN_SET_DEST;
+      break;
+    }
+
+  case I_MUL:
+    {
+      INSN_MEM_S;
+      INSN_GET_MSRC;
+      INSN_GET_MDEST;
+      dest *= src;
+      INSN_SET_MDEST;
+      break;
+    }
+  case I_DIV:
+    {
+      INSN_MEM_S;
+      INSN_GET_MSRC;
+      INSN_GET_MDEST;
+      ASSERT_SPEC(interrupt(s, core, INT_DV); return;, !src);
+      dest /= src;
+      INSN_SET_MDEST;
+      break;
+    }
+  case I_MOD:
+    {
+      INSN_MEM_S;
+      INSN_GET_MSRC;
+      INSN_GET_MDEST;
+      ASSERT_SPEC(interrupt(s, core, INT_DV); return;, !src);
+      dest %= src;
+      INSN_SET_MDEST;
+      break;
+    }
+  case I_INC:
+    {
+      INSN_MEM_U;
+      INSN_GET_MUNI;
+      dest++;
+      INSN_SET_MUNI;
+      break;
+    }
+  case I_DEC:
+    {
+      INSN_MEM_U;
+      INSN_GET_MUNI;
+      dest--;
+      INSN_SET_MUNI;
+      break;
+    }
+
+  case I_XOR:
+    {
+      INSN_MEM_S;
+      INSN_GET_MSRC;
+      INSN_GET_MDEST;
+      dest ^= src;
+      INSN_SET_MDEST;
+      break;
+    }
+  case I_XORI:
+    {
+      INSN_IMM_S;
+      INSN_GET_DEST;
+      dest ^= src;
+      INSN_SET_DEST;
+      break;
+    }
+  case I_OR:
+    {
+      INSN_MEM_S;
+      INSN_GET_MSRC;
+      INSN_GET_MDEST;
+      dest |= src;
+      INSN_SET_MDEST;
+      break;
+    }
+  case I_ORI:
+    {
+      INSN_IMM_S;
+      INSN_GET_DEST;
+      dest |= src;
+      INSN_SET_DEST;
+      break;
+    }
+  case I_AND:
+    {
+      INSN_MEM_S;
+      INSN_GET_MSRC;
+      INSN_GET_MDEST;
+      dest &= src;
+      INSN_SET_MDEST;
+      break;
+    }
+  case I_ANDI:
+    {
+      INSN_IMM_S;
+      INSN_GET_DEST;
+      dest &= src;
+      INSN_SET_DEST;
+      break;
+    }
+  case I_NOT:
+    {
+      INSN_MEM_U;
+      INSN_GET_MUNI;
+      dest = ~dest;
+      INSN_SET_MUNI;
+      break;
+    }
+
+  case I_BTS:
+    {
+      INSN_MEM_S;
+      INSN_GET_MSRC;
+      INSN_GET_MDEST;
+      dest |= (1 << (src & bit_mask));
+      INSN_SET_MDEST;
+      break;
+    }
+  case I_BTSI:
+    {
+      INSN_IMM_S;
+      INSN_GET_DEST;
+      dest |= (1 << (src & bit_mask));
+      INSN_SET_DEST;
+      break;
+    }
+  case I_BTR:
+    {
+      INSN_MEM_S;
+      INSN_GET_MSRC;
+      INSN_GET_MDEST;
+      dest &= ~(1 << (src & bit_mask));
+      INSN_SET_MDEST;
+      break;
+    }
+  case I_BTRI:
+    {
+      INSN_IMM_S;
+      INSN_GET_DEST;
+      dest &= ~(1 << (src & bit_mask));
+      INSN_SET_DEST;
+      break;
+    }
+  case I_BTC:
+    {
+      INSN_MEM_S;
+      INSN_GET_MSRC;
+      INSN_GET_MDEST;
+      dest ^= (1 << (src & bit_mask));
+      INSN_SET_MDEST;
+      break;
+    }
+  case I_BTCI:
+    {
+      INSN_IMM_S;
+      INSN_GET_DEST;
+      dest ^= (1 << (src & bit_mask));
+      INSN_SET_DEST;
+      break;
+    }
+
+  case I_SHL:
+    {
+      INSN_MEM_S;
+      INSN_GET_MSRC;
+      INSN_GET_MDEST;
+      dest <<= (src & bit_mask);
+      INSN_SET_MDEST;
+      break;
+    }
+  case I_SHLI:
+    {
+      INSN_IMM_S;
+      INSN_GET_DEST;
+      dest <<= (src & bit_mask);
+      INSN_SET_DEST;
+      break;
+    }
+  case I_SHR:
+    {
+      INSN_MEM_S;
+      INSN_GET_MSRC;
+      INSN_GET_MDEST;
+      dest >>= (src & bit_mask);
+      INSN_SET_MDEST;
+      break;
+    }
+  case I_SHRI:
+    {
+      INSN_IMM_S;
+      INSN_GET_DEST;
+      dest >>= (src & bit_mask);
+      INSN_SET_DEST;
+      break;
+    }
+  case I_ROL:
+    {
+      INSN_MEM_S;
+      INSN_GET_MSRC;
+      INSN_GET_MDEST;
+      dest = (dest >> ((size << 4) - (src & bit_mask))) | (dest << (src & bit_mask));
+      INSN_SET_MDEST;
+      break;
+    }
+  case I_ROLI:
+    {
+      INSN_IMM_S;
+      INSN_GET_DEST;
+      dest = (dest >> ((size << 4) - (src & bit_mask))) | (dest << (src & bit_mask));
+      INSN_SET_DEST;
+      break;
+    }
+  case I_ROR:
+    {
+      INSN_MEM_S;
+      INSN_GET_MSRC;
+      INSN_GET_MDEST;
+      dest = (dest << ((size << 4) - (src & bit_mask))) | (dest >> (src & bit_mask));
+      INSN_SET_MDEST;
+      break;
+    }
+  case I_RORI:
+    {
+      INSN_IMM_S;
+      INSN_GET_DEST;
+      dest = (dest << ((size << 4) - (src & bit_mask))) | (dest >> (src & bit_mask));
+      INSN_SET_DEST;
+      break;
+    }
+
+  case I_INT: 
+    {
+      KYANITE_GPR(IP) += size + 1;
+      INSN_IMM_U;
+      interrupt(s, core, dest);
+      return;
+    }
+  case I_JMP:
+    {
+      INSN_MEM_U;
+      uint32_t address = 0;
+      ASSERT_SPEC(interrupt(s, core, INT_UD); return;, insn_decode_address(core, mem_uni, &address));
+      KYANITE_GPR(IP) = address;
+      return;
+    }
+  case I_CALL:
+    {
+      INSN_MEM_U;
+      uint32_t address = 0;
+      ASSERT_SPEC(interrupt(s, core, INT_UD); return;, insn_decode_address(core, mem_uni, &address));
+      ASSERT_VOID(mmu_ram(s, core, KYANITE_GPR(SP) -= size, size, &KYANITE_GPR(IP), MMU_WRITE));
+      KYANITE_GPR(IP) = address;
+      return;
+    }
+  case I_JC:
+    {
+      //TODO
+      uint8_t op1 = 0;//insn[1] & 0x80 ? 1 : BIT_G(MSR(ALU), (insn[1] >> 4) & 0x7);
+      uint8_t op2 = 0;//insn[1] & 0x08 ? 1 : BIT_G(MSR(ALU), insn[1] & 0x7);
+      if (op1 != op2) break;
+      INSN_MEM_U;
+      uint32_t address = 0;
+      ASSERT_SPEC(interrupt(s, core, INT_UD); return;, insn_decode_address(core, mem_uni, &address));
+      KYANITE_GPR(IP) = address;
+      return;
+    }
+  case I_JNC:
+    {
+      uint8_t op1 = 0;//insn[1] & 0x80 ? 1 : BIT_G(MSR(ALU), (insn[1] >> 4) & 0x7);
+      uint8_t op2 = 0;//insn[1] & 0x08 ? 1 : BIT_G(MSR(ALU), insn[1] & 0x7);
+      if (op1 == op2) break;
+      INSN_MEM_U;
+      uint32_t address = 0;
+      ASSERT_SPEC(interrupt(s, core, INT_UD); return;, insn_decode_address(core, mem_uni, &address));
+      KYANITE_GPR(IP) = address;
+      return;
+    }
+  case I_MOVC:
+    {
+      uint8_t op1 = 0;//insn[1] & 0x80 ? 1 : BIT_G(MSR(ALU), (insn[1] >> 4) & 0x7);
+      uint8_t op2 = 0;//insn[1] & 0x08 ? 1 : BIT_G(MSR(ALU), insn[1] & 0x7);
+      if (op1 != op2) break;
+      INSN_MEM_S;
+      INSN_GET_MSRC;
+      INSN_GET_MDEST;
+      dest = src;
+      INSN_SET_MDEST;
+      break;
+    }
+  case I_MOVNC:
+    {
+      uint8_t op1 = 0;//insn[1] & 0x80 ? 1 : BIT_G(MSR(ALU), (insn[1] >> 4) & 0x7);
+      uint8_t op2 = 0;//insn[1] & 0x08 ? 1 : BIT_G(MSR(ALU), insn[1] & 0x7);
+      if (op1 == op2) break;
+      INSN_MEM_S;
+      INSN_GET_MSRC;
+      INSN_GET_MDEST;
+      dest = src;
+      INSN_SET_MDEST;
+      break;
+    }
+  case I_RET:
+    {
+      ASSERT_VOID(mmu_ram(s, core, KYANITE_GPR(SP), size, &KYANITE_GPR(IP), MMU_READ));
+      KYANITE_GPR(SP) += size;
+      return;
+    }
+
+  case I_IN:
+    {
+      INSN_MEM_S;
+      INSN_GET_MSRC;
+      uint64_t dest = 0;
+      mmu_io(s, core, src, size << insn.mem.extended, &dest, MMU_READ);
+      INSN_SET_MDEST;
+      break;
+    }
+  case I_INI:
+    {
+      INSN_IMM_S;
+      uint64_t dest = 0;
+      mmu_io(s, core, src, size << insn.reg.extended, &dest, MMU_READ);
+      INSN_SET_DEST;
+      break;
+    }
+  case I_OUT:
+    {
+      INSN_MEM_S;
+      INSN_GET_MSRC;
+      INSN_GET_MDEST;
+      mmu_io(s, core, dest, size << insn.mem.extended, &src, MMU_WRITE);
+      break;
+    }
+  case I_OUTI:
+    {
+      INSN_IMM_S;
+      INSN_GET_DEST;
+      mmu_io(s, core, dest, size << insn.reg.extended, &src, MMU_WRITE);
+      break;
+    }
+  case I_CRLD:
+    {
+      uint64_t dest = core->msr[insn.reg.reg2];
+      INSN_SET_DEST;
+      break;
+    }
+  case I_CRST:
+    {
+      INSN_GET_SRC;
+      core->msr[insn.reg.reg1] = src;
+      break;
+    }
+
+  case I_SEI:
+    {
+      KYANITE_MSR(ALU) |= KYANITE_MSR_ALU_IF;
+      break;
+    }
+  case I_CLI:
+    {
+      KYANITE_MSR(ALU) &= !KYANITE_MSR_ALU_IF;
+      break;
+    }
+  case I_IRET:
+    {
+      ASSERT_VOID(mmu_ram(s, core, KYANITE_GPR(SP), size, &KYANITE_GPR(IP), MMU_READ));
+      KYANITE_GPR(SP) += size;
+      if (IS_COMPLEX) {
+	if (KYANITE_MSR(INT) & KYANITE_MSR_INT_KERNEL) KYANITE_MSR(MODE) |= KYANITE_MSR_MODE_KERNEL;
+	else KYANITE_MSR(MODE) &= ~KYANITE_MSR_MODE_KERNEL;
+      }
+      return;
+    }
+  default:
+    interrupt(s, core, INT_UD);
+    return;
 }
+}*/
